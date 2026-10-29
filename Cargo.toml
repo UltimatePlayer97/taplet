@@ -1,0 +1,24 @@
+[package]
+name = "taplet"
+version = "0.1.0"
+edition = "2024"
+description = "Wayland-native autoclicker with a friendly GUI"
+license = "MIT"
+
+[dependencies]
+dirs = "7"
+libc = "0.2"
+iced = { version = "0.14", default-features = false, features = ["tiny-skia", "crisp", "web-colors", "tokio", "wayland"] }
+iced_fonts = { version = "0.3.0", features = ["lucide"] }
+rustix = { version = "1", features = ["time"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "1"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

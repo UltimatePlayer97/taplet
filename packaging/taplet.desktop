@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Taplet
+Comment=Wayland-native autoclicker
+Exec=taplet
+Terminal=false
+Categories=Utility;
