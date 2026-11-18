@@ -32,7 +32,7 @@ fn eviocgname(len: u16) -> Opcode {
     opcode::from_components(Direction::Read, b'E', 0x06, len as usize)
 }
 
-fn has_key(file: &File, code: u16) -> bool {
+fn has_key(file: &File, codes: &[u16]) -> bool {
     let mut types = [0u8; 8];
     if linux::ioctl_read(file, eviocgbit(0, types.len() as u16), &mut types).is_err()
         || types[EV_KEY as usize / 8] & (1 << (EV_KEY % 8)) == 0
@@ -45,7 +45,9 @@ fn has_key(file: &File, code: u16) -> bool {
     if linux::ioctl_read(file, eviocgbit(EV_KEY, len as u16), &mut keys).is_err() {
         return false;
     }
-    keys[code as usize / 8] & (1 << (code % 8)) != 0
+    codes
+        .iter()
+        .any(|code| keys[*code as usize / 8] & (1 << (*code % 8)) != 0)
 }
 
 fn device_name(file: &File) -> Option<String> {
@@ -57,7 +59,7 @@ fn device_name(file: &File) -> Option<String> {
     Some(String::from_utf8_lossy(&buf[..end]).into_owned())
 }
 
-fn scan(code: u16) -> Vec<Device> {
+fn scan(codes: &[u16]) -> Vec<Device> {
     let Ok(entries) = std::fs::read_dir("/dev/input") else {
         return Vec::new();
     };
@@ -73,7 +75,7 @@ fn scan(code: u16) -> Vec<Device> {
         else {
             continue;
         };
-        if !has_key(&file, code) {
+        if !has_key(&file, codes) {
             continue;
         }
         if device_name(&file).is_some_and(|name| name.starts_with("taplet")) {
@@ -84,7 +86,7 @@ fn scan(code: u16) -> Vec<Device> {
     devices
 }
 
-fn read_activation(file: &File, code: u16) -> std::io::Result<bool> {
+fn read_activation(file: &File, codes: &[u16]) -> std::io::Result<bool> {
     let mut buf = [0u8; 4096];
     let mut activated = false;
     loop {
@@ -104,7 +106,7 @@ fn read_activation(file: &File, code: u16) -> std::io::Result<bool> {
         for chunk in buf[..read].chunks_exact(size) {
             let event =
                 unsafe { std::ptr::read_unaligned(chunk.as_ptr().cast::<linux::InputEvent>()) };
-            if event.type_ == EV_KEY && event.code == code && event.value == 1 {
+            if event.type_ == EV_KEY && codes.contains(&event.code) && event.value == 1 {
                 activated = true;
             }
         }
@@ -115,14 +117,14 @@ fn read_activation(file: &File, code: u16) -> std::io::Result<bool> {
 }
 
 pub(super) fn run(shortcut: &str, cancel: &AtomicBool, tx: &Sender<Event>) -> Result<(), String> {
-    let code = key_code(shortcut).ok_or_else(|| {
-        format!("no keyboard mapping for shortcut {shortcut:?}; pick another key")
+    let codes = key_codes(shortcut).ok_or_else(|| {
+        format!("no input mapping for shortcut {shortcut:?}; pick another key or mouse button")
     })?;
 
-    let mut devices = scan(code);
+    let mut devices = scan(&codes);
     if devices.is_empty() {
         return Err(format!(
-            "no readable keyboard declares {shortcut} under /dev/input; add your user to the input group or use a portal that supports GlobalShortcuts"
+            "no readable input device declares {shortcut} under /dev/input; add your user to the input group"
         ));
     }
     if tx
@@ -139,7 +141,7 @@ pub(super) fn run(shortcut: &str, cancel: &AtomicBool, tx: &Sender<Event>) -> Re
         }
 
         if devices.is_empty() {
-            devices = scan(code);
+            devices = scan(&codes);
             if devices.is_empty() {
                 std::thread::sleep(Duration::from_millis(500));
                 continue;
@@ -163,7 +165,7 @@ pub(super) fn run(shortcut: &str, cancel: &AtomicBool, tx: &Sender<Event>) -> Re
         for (index, pollfd) in pollfds.iter().enumerate() {
             let events = pollfd.revents();
             if events.contains(PollFlags::IN) {
-                match read_activation(&devices[index].file, code) {
+                match read_activation(&devices[index].file, &codes) {
                     Ok(true) => fired = true,
                     Ok(false) => {}
                     Err(_) => dead.push(index),
@@ -221,6 +223,24 @@ fn letter_code(letter: char) -> Option<u16> {
     LETTERS
         .iter()
         .find_map(|(name, code)| (*name == letter).then_some(*code))
+}
+
+fn key_codes(name: &str) -> Option<Vec<u16>> {
+    let name = name.trim();
+    if let Some(button) = name.strip_prefix("Mouse") {
+        return match button {
+            "Right" => Some(vec![0x111]),
+            "Middle" => Some(vec![0x112]),
+            "Back" => Some(vec![0x113, 0x116]),
+            "Forward" => Some(vec![0x114, 0x115]),
+            _ => button
+                .parse::<u16>()
+                .ok()
+                .filter(|code| *code <= KEY_MAX)
+                .map(|code| vec![code]),
+        };
+    }
+    key_code(name).map(|code| vec![code])
 }
 
 fn key_code(name: &str) -> Option<u16> {
@@ -316,5 +336,14 @@ mod tests {
     fn rejects_unknown_keys() {
         assert_eq!(key_code("F25"), None);
         assert_eq!(key_code("Nope"), None);
+    }
+
+    #[test]
+    fn maps_mouse_buttons() {
+        assert_eq!(key_codes("MouseRight"), Some(vec![0x111]));
+        assert_eq!(key_codes("MouseMiddle"), Some(vec![0x112]));
+        assert_eq!(key_codes("MouseBack"), Some(vec![0x113, 0x116]));
+        assert_eq!(key_codes("MouseForward"), Some(vec![0x114, 0x115]));
+        assert_eq!(key_codes("Mouse999"), None);
     }
 }

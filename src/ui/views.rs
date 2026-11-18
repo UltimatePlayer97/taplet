@@ -914,7 +914,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
 
 pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
     let shortcut_text = if state.capturing_shortcut {
-        "Press a key… (Esc to cancel)".to_string()
+        "Press a key or mouse button… (Esc to cancel)".to_string()
     } else {
         state.config.shortcut.clone()
     };
@@ -996,7 +996,7 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
     let bind_line = state.hyprland_bind();
     let shortcut = card(
         column![
-            label("Keyboard shortcut"),
+            label("Shortcut"),
             row![
                 text(shortcut_text).size(18),
                 Space::new().width(Length::Fill),
@@ -1007,7 +1007,7 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
                     }),
             ]
             .align_y(Alignment::Center),
-            text("Works while the Taplet window is focused; the global hotkey uses the same key.")
+            text("Works while the Taplet window is focused; the global hotkey uses the same shortcut.")
                 .size(11)
                 .style(text::secondary),
             rule::horizontal(1).style(rule_style),

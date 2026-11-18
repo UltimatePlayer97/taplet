@@ -1,5 +1,6 @@
 use iced::futures::StreamExt;
 use iced::keyboard::{self, Key};
+use iced::mouse;
 use iced::{Element, Size, Subscription, Task, Theme};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -20,6 +21,10 @@ const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
 const MIN_WINDOW_WIDTH: f32 = 280.0;
 const MIN_WINDOW_HEIGHT: f32 = 200.0;
 const HOTKEY_CAPTURE_GRACE: Duration = Duration::from_millis(750);
+
+fn is_mouse_shortcut(shortcut: &str) -> bool {
+    shortcut.starts_with("Mouse")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendStatus {
@@ -53,6 +58,7 @@ pub enum Message {
     CustomHexChanged(String),
     CaptureShortcut,
     KeyPressed(Key),
+    MousePressed(mouse::Button),
     CopyBind,
     Reconnect,
     BackendSelected(BackendChoice),
@@ -107,7 +113,10 @@ impl Taplet {
         let engine_choice = Arc::clone(&backend_choice);
         let custom_hex_text = hex_string(config.custom_accent);
         let mut hotkeys = Hotkeys::new();
-        hotkeys.register(&config.shortcut, config.backend == BackendChoice::Uinput);
+        hotkeys.register(
+            &config.shortcut,
+            config.backend == BackendChoice::Uinput || is_mouse_shortcut(&config.shortcut),
+        );
         let state = Self {
             interval_text: config.interval_ms.to_string(),
             count_text: config.repeat_count.to_string(),
@@ -160,7 +169,11 @@ impl Taplet {
     }
 
     pub fn hyprland_bind(&self) -> String {
-        format!("bind = , {}, exec, taplet toggle", self.config.shortcut)
+        if is_mouse_shortcut(&self.config.shortcut) {
+            "# Mouse shortcut: Taplet registers it directly; no compositor bind needed.".to_string()
+        } else {
+            format!("bind = , {}, exec, taplet toggle", self.config.shortcut)
+        }
     }
 
     fn persist(&mut self) {
@@ -170,10 +183,19 @@ impl Taplet {
     }
 
     fn refresh_hotkeys(&mut self) {
-        let prefer_uinput = self.config.backend == BackendChoice::Uinput;
+        let prefer_uinput = self.config.backend == BackendChoice::Uinput
+            || is_mouse_shortcut(&self.config.shortcut);
         if self.hotkeys.register(&self.config.shortcut, prefer_uinput) {
             self.hotkey = HotkeyStatus::Registering;
         }
+    }
+
+    fn accept_shortcut(&mut self, shortcut: String) {
+        self.config.shortcut = shortcut;
+        self.capturing_shortcut = false;
+        self.suppress_hotkey_until = Some(Instant::now() + HOTKEY_CAPTURE_GRACE);
+        self.persist();
+        self.refresh_hotkeys();
     }
 
     fn handle_hotkey(&mut self, event: HotkeyEvent) {
@@ -257,6 +279,17 @@ impl Taplet {
             Key::Named(named) => Some(format!("{named:?}")),
             Key::Character(value) => Some(value.to_uppercase()),
             Key::Unidentified => None,
+        }
+    }
+
+    fn mouse_name(button: mouse::Button) -> Option<String> {
+        match button {
+            mouse::Button::Left => None,
+            mouse::Button::Right => Some("MouseRight".to_string()),
+            mouse::Button::Middle => Some("MouseMiddle".to_string()),
+            mouse::Button::Back => Some("MouseBack".to_string()),
+            mouse::Button::Forward => Some("MouseForward".to_string()),
+            mouse::Button::Other(code) => Some(format!("Mouse{code}")),
         }
     }
 
@@ -368,17 +401,24 @@ impl Taplet {
                         self.suppress_hotkey_until =
                             Some(Instant::now() + HOTKEY_CAPTURE_GRACE);
                     } else if let Some(name) = Self::key_name(&key) {
-                        self.config.shortcut = name;
-                        self.capturing_shortcut = false;
-                        self.suppress_hotkey_until =
-                            Some(Instant::now() + HOTKEY_CAPTURE_GRACE);
-                        self.persist();
-                        self.refresh_hotkeys();
+                        self.accept_shortcut(name);
                     }
                 } else if self.page == Page::Main
                     // The global listener already delivers this key; toggling twice cancels out.
                     && !matches!(self.hotkey, HotkeyStatus::Active(_))
                     && Self::key_name(&key).as_deref() == Some(self.config.shortcut.as_str())
+                {
+                    self.toggle();
+                }
+            }
+            Message::MousePressed(button) => {
+                if self.capturing_shortcut {
+                    if let Some(name) = Self::mouse_name(button) {
+                        self.accept_shortcut(name);
+                    }
+                } else if self.page == Page::Main
+                    && !matches!(self.hotkey, HotkeyStatus::Active(_))
+                    && Self::mouse_name(button).as_deref() == Some(self.config.shortcut.as_str())
                 {
                     self.toggle();
                 }
@@ -446,6 +486,12 @@ impl Taplet {
             iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             keyboard::listen().filter_map(|event| match event {
                 keyboard::Event::KeyPressed { key, .. } => Some(Message::KeyPressed(key)),
+                _ => None,
+            }),
+            iced::event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(mouse::Event::ButtonPressed(button)) => {
+                    Some(Message::MousePressed(button))
+                }
                 _ => None,
             }),
         ])

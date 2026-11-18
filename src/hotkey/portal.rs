@@ -228,7 +228,7 @@ fn token(prefix: &str) -> String {
 /// Best-effort conversion from a Taplet key name to the XDG shortcut syntax.
 fn preferred_trigger(shortcut: &str) -> Option<String> {
     let shortcut = shortcut.trim();
-    if shortcut.is_empty() {
+    if shortcut.is_empty() || shortcut.starts_with("Mouse") {
         return None;
     }
 
@@ -281,6 +281,7 @@ mod tests {
         assert_eq!(preferred_trigger("A").as_deref(), Some("a"));
         assert_eq!(preferred_trigger("Space").as_deref(), Some("space"));
         assert_eq!(preferred_trigger("ArrowLeft").as_deref(), Some("Left"));
+        assert_eq!(preferred_trigger("MouseBack"), None);
         assert_eq!(preferred_trigger("-"), None);
         assert_eq!(preferred_trigger("  "), None);
     }
