@@ -1079,9 +1079,13 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
     ]
     .spacing(14);
 
-    container(scrollable(content))
-        .padding(20)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    container(
+        scrollable(content).direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::hidden(),
+        )),
+    )
+    .padding(20)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
