@@ -3,5 +3,7 @@ Type=Application
 Name=Taplet
 Comment=Wayland-native autoclicker
 Exec=taplet
+Icon=taplet
+StartupWMClass=taplet
 Terminal=false
 Categories=Utility;

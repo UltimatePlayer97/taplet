@@ -33,6 +33,7 @@
 
           postInstall = ''
             install -Dm644 packaging/taplet.desktop $out/share/applications/taplet.desktop
+            install -Dm644 icon.png $out/share/icons/hicolor/1024x1024/apps/taplet.png
             wrapProgram $out/bin/taplet \
               --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs}
           '';
@@ -44,11 +45,17 @@
             platforms = pkgs.lib.platforms.linux;
           };
         };
+        taplet-dev = taplet.overrideAttrs (old: {
+          pname = "taplet-dev";
+          cargoBuildType = "debug";
+          cargoCheckType = "debug";
+        });
       in
       {
         packages = {
           default = taplet;
           taplet = taplet;
+          dev = taplet-dev;
         };
 
         apps.default = flake-utils.lib.mkApp { drv = taplet; };

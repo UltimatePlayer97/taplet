@@ -2,7 +2,7 @@ use iced::futures::StreamExt;
 use iced::keyboard::{self, Key};
 use iced::mouse;
 use iced::{Element, Size, Subscription, Task, Theme};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
@@ -14,6 +14,7 @@ use crate::engine::{ClickPlan, Command, Engine, Event, StopReason};
 use crate::hotkey::{Event as HotkeyEvent, HotkeyStatus, Hotkeys};
 use crate::input::{AutoBackend, MouseButton};
 use crate::ipc::{self, RemoteCommand};
+use crate::tray::{self, TrayEvent, TrayShared};
 use crate::ui;
 
 const DEFAULT_WINDOW_WIDTH: f32 = 720.0;
@@ -66,6 +67,7 @@ pub enum Message {
     Reconnect,
     BackendSelected(BackendChoice),
     WindowResized(Size),
+    CloseRequested(iced::window::Id),
     EnableResize,
     Tick,
     PickPosition,
@@ -94,6 +96,11 @@ pub struct Taplet {
     remote: Option<ipc::Listener>,
     backend_choice: Arc<AtomicU8>,
     hotkeys: Hotkeys,
+    tray_shared: Arc<Mutex<TrayShared>>,
+    tray_events: std::sync::mpsc::Receiver<TrayEvent>,
+    tray: Option<ksni::blocking::Handle<tray::TapletTray>>,
+    window_visible: bool,
+    window_id: Option<iced::window::Id>,
 }
 
 impl Taplet {
@@ -116,6 +123,13 @@ impl Taplet {
         let backend_choice = Arc::new(AtomicU8::new(config.backend.as_u8()));
         let engine_choice = Arc::clone(&backend_choice);
         let custom_hex_text = hex_string(config.custom_accent);
+        let tray_shared = Arc::new(Mutex::new(TrayShared {
+            running: false,
+            interval_ms: config.interval_ms,
+            window_visible: true,
+        }));
+        let (tray_event_tx, tray_event_rx) = std::sync::mpsc::channel();
+        let tray = tray::spawn(Arc::clone(&tray_shared), tray_event_tx);
         let mut hotkeys = Hotkeys::new();
         hotkeys.register(
             &config.shortcut,
@@ -143,6 +157,11 @@ impl Taplet {
             remote,
             backend_choice,
             hotkeys,
+            tray_shared,
+            tray_events: tray_event_rx,
+            tray,
+            window_visible: true,
+            window_id: None,
         };
         (state, enable_resize_later())
     }
@@ -273,6 +292,38 @@ impl Taplet {
                     self.message = Some(reason);
                 }
             }
+        }
+    }
+
+    fn hide_window(id: iced::window::Id) -> Task<Message> {
+        iced::window::minimize(id, true)
+            .chain(iced::window::set_mode(id, iced::window::Mode::Hidden))
+    }
+
+    fn show_window(id: iced::window::Id) -> Task<Message> {
+        iced::window::set_mode(id, iced::window::Mode::Windowed)
+            .chain(iced::window::gain_focus(id))
+    }
+
+    fn sync_tray(&self) {
+        let updated = TrayShared {
+            running: self.running || self.pending_start,
+            interval_ms: self.config.interval_ms,
+            window_visible: self.window_visible,
+        };
+        let changed = match self.tray_shared.lock() {
+            Ok(mut guard) => {
+                if *guard != updated {
+                    *guard = updated;
+                    true
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        };
+        if changed && let Some(handle) = &self.tray {
+            let _ = handle.update(|_| ());
         }
     }
 
@@ -452,6 +503,15 @@ impl Taplet {
                 self.backend = BackendStatus::Connecting;
                 self.engine.send(Command::Reconnect);
             }
+            Message::CloseRequested(id) => {
+                self.window_id = Some(id);
+                if self.tray.is_none() {
+                    return iced::window::close(id);
+                }
+                self.window_visible = false;
+                self.sync_tray();
+                return Self::hide_window(id);
+            }
             Message::WindowResized(size) => {
                 self.window_size = size;
             }
@@ -484,6 +544,39 @@ impl Taplet {
                 for command in commands {
                     self.handle_remote(command);
                 }
+                let tray_events: Vec<TrayEvent> = self.tray_events.try_iter().collect();
+                let mut tray_quit = false;
+                let mut window_toggle = false;
+                for event in tray_events {
+                    match event {
+                        TrayEvent::Toggle => self.toggle(),
+                        TrayEvent::ToggleWindow => window_toggle = true,
+                        TrayEvent::SetInterval(interval_ms) => {
+                            self.interval_text = interval_ms.to_string();
+                            self.config.interval_ms = interval_ms;
+                            self.persist();
+                        }
+                        TrayEvent::Quit => tray_quit = true,
+                    }
+                }
+                self.sync_tray();
+                if tray_quit {
+                    return iced::window::latest().and_then(iced::window::close);
+                }
+                if window_toggle {
+                    let visible = !self.window_visible;
+                    self.window_visible = visible;
+                    self.sync_tray();
+                    let window_id = self.window_id;
+                    return match window_id {
+                        Some(id) => {
+                            if visible { Self::show_window(id) } else { Self::hide_window(id) }
+                        }
+                        None => iced::window::latest().and_then(move |id| {
+                            if visible { Self::show_window(id) } else { Self::hide_window(id) }
+                        }),
+                    };
+                }
             }
         }
         Task::none()
@@ -506,6 +599,7 @@ impl Taplet {
         Subscription::batch([
             ticker(),
             iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
+            iced::window::close_requests().map(Message::CloseRequested),
             keyboard::listen().filter_map(|event| match event {
                 keyboard::Event::KeyPressed { key, .. } => Some(Message::KeyPressed(key)),
                 _ => None,
@@ -625,11 +719,19 @@ fn hyprland_set_floating() -> bool {
     false
 }
 
+fn window_icon() -> Option<iced::window::Icon> {
+    let image = image::load_from_memory(include_bytes!("../icon.png")).ok()?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    iced::window::icon::from_rgba(rgba.into_raw(), width, height).ok()
+}
+
 pub fn run() -> iced::Result {
     request_floating();
     iced::application(Taplet::boot, Taplet::update, Taplet::view)
         .title("Taplet")
         .subscription(Taplet::subscription)
+        .exit_on_close_request(false)
         .theme(Taplet::theme)
         .font(iced_fonts::LUCIDE_FONT_BYTES)
         .window(iced::window::Settings {
@@ -638,6 +740,7 @@ pub fn run() -> iced::Result {
             max_size: Some(Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)),
             resizable: false,
             position: iced::window::Position::Centered,
+            icon: window_icon(),
             platform_specific: iced::window::settings::PlatformSpecific {
                 application_id: "taplet".to_string(),
                 ..Default::default()
