@@ -17,7 +17,7 @@ A lightweight, Wayland-native autoclicker with a friendly GUI, inspired by OP Au
 cargo build --release
 ```
 
-Requires a recent stable Rust toolchain (edition 2024) and Wayland client libraries.
+Requires a recent stable Rust toolchain (edition 2024), Wayland client libraries, and `libdbus-1` development headers.
 
 ## Global shortcut
 

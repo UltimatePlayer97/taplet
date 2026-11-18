@@ -5,6 +5,7 @@ mod error;
 mod hotkey;
 mod input;
 mod ipc;
+mod linux;
 mod ui;
 
 use std::process::ExitCode;

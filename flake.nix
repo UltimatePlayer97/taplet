@@ -12,6 +12,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         runtimeLibs = with pkgs; [
+          dbus
           wayland
           libxkbcommon
         ];
@@ -24,6 +25,7 @@
 
           nativeBuildInputs = with pkgs; [
             pkg-config
+            dbus.dev
             makeWrapper
           ];
 

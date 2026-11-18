@@ -6,6 +6,16 @@ use serde::{Deserialize, Serialize};
 use crate::error::ConfigError;
 use crate::input::MouseButton;
 
+fn config_dir() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(path);
+        if path.is_absolute() {
+            return Some(path);
+        }
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config"))
+}
+
 pub const MIN_INTERVAL_MS: u64 = 1;
 pub const MAX_INTERVAL_MS: u64 = 3_600_000;
 pub const DEFAULT_INTERVAL_MS: u64 = 100;
@@ -180,7 +190,7 @@ impl Default for Config {
 
 impl Config {
     pub fn path() -> Result<PathBuf, ConfigError> {
-        let base = dirs::config_dir().ok_or(ConfigError::NoConfigDir)?;
+        let base = config_dir().ok_or(ConfigError::NoConfigDir)?;
         Ok(base.join("taplet").join("config.toml"))
     }
 

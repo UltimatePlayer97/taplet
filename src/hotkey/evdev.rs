@@ -1,46 +1,56 @@
 use std::fs::{File, OpenOptions};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::io::Errno;
+use rustix::ioctl::{Direction, Opcode, opcode};
+use rustix::time::Timespec;
+
 use super::{Event, HotkeyBackend, HotkeyStatus};
+use crate::linux;
 
 const EV_KEY: u16 = 1;
 const KEY_MAX: u16 = 0x2ff;
-const POLL_TIMEOUT_MS: libc::c_int = 200;
+const POLL_TIMEOUT: Timespec = Timespec {
+    tv_sec: 0,
+    tv_nsec: 200_000_000,
+};
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
 struct Device {
     file: File,
 }
 
-fn eviocgbit(event_type: u16, len: u16) -> libc::c_ulong {
-    (2u64 << 30) | ((len as u64) << 16) | ((b'E' as u64) << 8) | (0x20 + event_type as u64)
+fn eviocgbit(event_type: u16, len: u16) -> Opcode {
+    opcode::from_components(Direction::Read, b'E', 0x20 + event_type as u8, len as usize)
 }
 
-fn eviocgname(len: u16) -> libc::c_ulong {
-    (2u64 << 30) | ((len as u64) << 16) | ((b'E' as u64) << 8) | 0x06
+fn eviocgname(len: u16) -> Opcode {
+    opcode::from_components(Direction::Read, b'E', 0x06, len as usize)
 }
 
-fn has_key(fd: libc::c_int, code: u16) -> bool {
+fn has_key(file: &File, code: u16) -> bool {
     let mut types = [0u8; 8];
-    let rc = unsafe { libc::ioctl(fd, eviocgbit(0, types.len() as u16), types.as_mut_ptr()) };
-    if rc < 0 || types[EV_KEY as usize / 8] & (1 << (EV_KEY % 8)) == 0 {
+    if linux::ioctl_read(file, eviocgbit(0, types.len() as u16), &mut types).is_err()
+        || types[EV_KEY as usize / 8] & (1 << (EV_KEY % 8)) == 0
+    {
         return false;
     }
 
     let len = (KEY_MAX as usize + 8) / 8;
     let mut keys = vec![0u8; len];
-    let rc = unsafe { libc::ioctl(fd, eviocgbit(EV_KEY, len as u16), keys.as_mut_ptr()) };
-    rc >= 0 && keys[code as usize / 8] & (1 << (code % 8)) != 0
+    if linux::ioctl_read(file, eviocgbit(EV_KEY, len as u16), &mut keys).is_err() {
+        return false;
+    }
+    keys[code as usize / 8] & (1 << (code % 8)) != 0
 }
 
-fn device_name(fd: libc::c_int) -> Option<String> {
+fn device_name(file: &File) -> Option<String> {
     let mut buf = [0u8; 256];
-    let rc = unsafe { libc::ioctl(fd, eviocgname(buf.len() as u16), buf.as_mut_ptr()) };
-    if rc < 0 {
+    if linux::ioctl_read(file, eviocgname(buf.len() as u16), &mut buf).is_err() {
         return None;
     }
     let end = buf.iter().position(|byte| *byte == 0).unwrap_or(buf.len());
@@ -58,16 +68,15 @@ fn scan(code: u16) -> Vec<Device> {
         }
         let Ok(file) = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NONBLOCK)
+            .custom_flags(linux::O_NONBLOCK)
             .open(entry.path())
         else {
             continue;
         };
-        let fd = file.as_raw_fd();
-        if !has_key(fd, code) {
+        if !has_key(&file, code) {
             continue;
         }
-        if device_name(fd).is_some_and(|name| name.starts_with("taplet")) {
+        if device_name(&file).is_some_and(|name| name.starts_with("taplet")) {
             continue;
         }
         devices.push(Device { file });
@@ -79,14 +88,11 @@ fn read_activation(file: &File, code: u16) -> std::io::Result<bool> {
     let mut buf = [0u8; 4096];
     let mut activated = false;
     loop {
-        let read = unsafe { libc::read(file.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
-        if read < 0 {
-            let err = std::io::Error::last_os_error();
-            return match err.kind() {
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted => Ok(activated),
-                _ => Err(err),
-            };
-        }
+        let read = match rustix::io::read(file, &mut buf) {
+            Ok(read) => read,
+            Err(Errno::WOULDBLOCK | Errno::INTR) => return Ok(activated),
+            Err(err) => return Err(err.into()),
+        };
         if read == 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
@@ -94,16 +100,15 @@ fn read_activation(file: &File, code: u16) -> std::io::Result<bool> {
             ));
         }
 
-        let size = std::mem::size_of::<libc::input_event>();
-        let bytes = read as usize;
-        for chunk in buf[..bytes].chunks_exact(size) {
+        let size = std::mem::size_of::<linux::InputEvent>();
+        for chunk in buf[..read].chunks_exact(size) {
             let event =
-                unsafe { std::ptr::read_unaligned(chunk.as_ptr().cast::<libc::input_event>()) };
+                unsafe { std::ptr::read_unaligned(chunk.as_ptr().cast::<linux::InputEvent>()) };
             if event.type_ == EV_KEY && event.code == code && event.value == 1 {
                 activated = true;
             }
         }
-        if bytes < buf.len() {
+        if read < buf.len() {
             return Ok(activated);
         }
     }
@@ -141,46 +146,33 @@ pub(super) fn run(shortcut: &str, cancel: &AtomicBool, tx: &Sender<Event>) -> Re
             }
         }
 
-        let mut pollfds: Vec<libc::pollfd> = devices
+        let mut pollfds: Vec<PollFd> = devices
             .iter()
-            .map(|device| libc::pollfd {
-                fd: device.file.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            })
+            .map(|device| PollFd::new(&device.file, PollFlags::IN))
             .collect();
 
-        let rc = unsafe {
-            libc::poll(
-                pollfds.as_mut_ptr(),
-                pollfds.len() as libc::nfds_t,
-                POLL_TIMEOUT_MS,
-            )
-        };
-        if rc < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(format!("poll: {err}"));
-        }
-        if rc == 0 {
-            continue;
+        match poll(&mut pollfds, Some(&POLL_TIMEOUT)) {
+            Ok(0) => continue,
+            Ok(_) => {}
+            Err(Errno::INTR) => continue,
+            Err(err) => return Err(format!("poll: {err}")),
         }
 
         let mut dead = Vec::new();
         let mut fired = false;
         for (index, pollfd) in pollfds.iter().enumerate() {
-            if pollfd.revents & libc::POLLIN != 0 {
+            let events = pollfd.revents();
+            if events.contains(PollFlags::IN) {
                 match read_activation(&devices[index].file, code) {
                     Ok(true) => fired = true,
                     Ok(false) => {}
                     Err(_) => dead.push(index),
                 }
-            } else if pollfd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            } else if events.intersects(PollFlags::ERR | PollFlags::HUP | PollFlags::NVAL) {
                 dead.push(index);
             }
         }
+        drop(pollfds);
         for index in dead.into_iter().rev() {
             devices.remove(index);
         }

@@ -1,20 +1,23 @@
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::thread;
 use std::time::Duration;
 
+use rustix::ioctl::Opcode;
+use rustix::ioctl::opcode;
+
 use super::virtual_pointer::query_layout;
 use super::{InputBackend, MouseButton};
 use crate::error::InputError;
+use crate::linux;
 
-const UI_DEV_CREATE: u64 = 0x5501;
-const UI_DEV_DESTROY: u64 = 0x5502;
-const UI_SET_EVBIT: u64 = 0x4004_5564;
-const UI_SET_KEYBIT: u64 = 0x4004_5565;
-const UI_SET_ABSBIT: u64 = 0x4004_5567;
+const UI_DEV_CREATE: Opcode = opcode::none(b'U', 1);
+const UI_DEV_DESTROY: Opcode = opcode::none(b'U', 2);
+const UI_SET_EVBIT: Opcode = opcode::write::<i32>(b'U', 100);
+const UI_SET_KEYBIT: Opcode = opcode::write::<i32>(b'U', 101);
+const UI_SET_ABSBIT: Opcode = opcode::write::<i32>(b'U', 103);
 
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
@@ -50,40 +53,18 @@ fn map_io(err: std::io::Error) -> InputError {
     }
 }
 
-fn ioctl(file: &File, request: u64, arg: i32) -> Result<(), InputError> {
-    let rc = unsafe { libc::ioctl(file.as_raw_fd(), request as _, arg) };
-    if rc < 0 {
-        Err(map_io(std::io::Error::last_os_error()))
-    } else {
-        Ok(())
-    }
+fn ioctl(file: &File, request: Opcode, argument: i32) -> Result<(), InputError> {
+    linux::ioctl_value(file, request, argument).map_err(map_io)
 }
 
 fn write_event(file: &File, kind: u16, code: u16, value: i32) -> Result<(), InputError> {
-    let event = libc::input_event {
-        time: libc::timeval {
-            tv_sec: 0,
-            tv_usec: 0,
-        },
+    let event = linux::InputEvent {
+        time: [0; 2],
         type_: kind,
         code,
         value,
     };
-    let size = std::mem::size_of::<libc::input_event>();
-    let written = unsafe {
-        libc::write(
-            file.as_raw_fd(),
-            (&event as *const libc::input_event).cast(),
-            size,
-        )
-    };
-    if written == size as isize {
-        Ok(())
-    } else {
-        Err(InputError::Connection(
-            std::io::Error::last_os_error().to_string(),
-        ))
-    }
+    linux::write_struct(file, &event).map_err(map_io)
 }
 
 impl UinputBackend {
@@ -124,7 +105,7 @@ impl InputBackend for UinputBackend {
         let bounds = query_layout();
         let file = OpenOptions::new()
             .write(true)
-            .custom_flags(libc::O_NONBLOCK)
+            .custom_flags(linux::O_NONBLOCK)
             .open("/dev/uinput")
             .map_err(map_io)?;
 
@@ -156,12 +137,7 @@ impl InputBackend for UinputBackend {
             dev.absmax[ABS_Y as usize] = h - 1;
         }
 
-        let size = std::mem::size_of::<UserDev>();
-        let written =
-            unsafe { libc::write(file.as_raw_fd(), (&dev as *const UserDev).cast(), size) };
-        if written != size as isize {
-            return Err(map_io(std::io::Error::last_os_error()));
-        }
+        linux::write_struct(&file, &dev).map_err(map_io)?;
         ioctl(&file, UI_DEV_CREATE, 0)?;
         thread::sleep(Duration::from_millis(250));
         self.file = Some(file);

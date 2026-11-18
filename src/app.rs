@@ -1,3 +1,4 @@
+use iced::futures::StreamExt;
 use iced::keyboard::{self, Key};
 use iced::{Element, Size, Subscription, Task, Theme};
 use std::sync::Arc;
@@ -416,7 +417,7 @@ impl Taplet {
 
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            iced::time::every(Duration::from_millis(40)).map(|_| Message::Tick),
+            ticker(),
             iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             keyboard::listen().filter_map(|event| match event {
                 keyboard::Event::KeyPressed { key, .. } => Some(Message::KeyPressed(key)),
@@ -432,6 +433,23 @@ impl Taplet {
             self.config.custom_accent,
         )
     }
+}
+
+fn ticker() -> Subscription<Message> {
+    Subscription::run_with("taplet-tick", |_| {
+        let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+        let _ = std::thread::Builder::new()
+            .name("taplet-tick".to_string())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_millis(40));
+                    if sender.unbounded_send(()).is_err() {
+                        break;
+                    }
+                }
+            });
+        receiver.map(|_| Message::Tick)
+    })
 }
 
 fn enable_resize_later() -> Task<Message> {
