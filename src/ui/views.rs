@@ -1,12 +1,13 @@
 use iced::overlay::menu;
 use iced::widget::{
-    Space, button, column, container, pick_list, row, rule, scrollable, slider, text, text_input,
+    Space, Stack, button, column, container, pick_list, row, rule, scrollable, slider, text,
+    text_input,
 };
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Theme};
 use iced_fonts::lucide;
 
 use super::theme::{accent_color, blend, divider, field, muted_text, readable_ink, surface};
-use crate::app::{BackendStatus, Message, Taplet};
+use crate::app::{BackendStatus, INPUT_GROUP_COMMAND, Message, Taplet};
 use crate::config::{AccentColor, BackendChoice, ClickLocation, ClickType, RepeatMode, ThemeMode};
 use crate::hotkey::HotkeyStatus;
 use crate::input::MouseButton;
@@ -907,6 +908,79 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
 
     container(content)
         .padding(padding)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+pub fn input_permission_dialog<'a>(base: Element<'a, Message>) -> Element<'a, Message> {
+    let command = container(
+        text(INPUT_GROUP_COMMAND)
+            .size(12)
+            .font(iced::Font::MONOSPACE),
+    )
+    .padding([8, 10])
+    .width(Length::Fill)
+    .style(|theme: &Theme| container::Style {
+        background: Some(field(theme).into()),
+        border: Border {
+            color: divider(theme),
+            width: 1.0,
+            radius: 5.0.into(),
+        },
+        ..container::Style::default()
+    });
+
+    let dialog = container(
+        column![
+            text("Input permission needed").size(18),
+            text("Taplet cannot read /dev/input. Global mouse buttons and the uinput keyboard fallback will not work.")
+                .size(12)
+                .style(text::secondary),
+            command,
+            text("Run this command, then log out and back in.")
+                .size(11)
+                .style(text::secondary),
+            row![
+                button(text("Copy command").size(13))
+                    .on_press(Message::CopyInputGroupCommand)
+                    .style(|theme, status| button_style(theme, status, ButtonKind::Primary)),
+                button(text("Close").size(13))
+                    .on_press(Message::DismissInputDialog)
+                    .style(|theme, status| button_style(theme, status, ButtonKind::Secondary)),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        ]
+        .spacing(12),
+    )
+    .padding(20)
+    .width(Length::Fill)
+    .max_width(440.0)
+    .style(card_style);
+
+    let layer = container(dialog)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill);
+
+    let backdrop = button(Space::new())
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .on_press(Message::DismissInputDialog)
+        .style(|_theme, _status| button::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.55).into()),
+            text_color: Color::TRANSPARENT,
+            border: Border::default(),
+            shadow: Shadow::default(),
+            snap: true,
+        });
+
+    Stack::new()
+        .push(base)
+        .push(backdrop)
+        .push(layer)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()

@@ -21,6 +21,7 @@ const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
 const MIN_WINDOW_WIDTH: f32 = 280.0;
 const MIN_WINDOW_HEIGHT: f32 = 200.0;
 const HOTKEY_CAPTURE_GRACE: Duration = Duration::from_millis(750);
+pub const INPUT_GROUP_COMMAND: &str = "sudo usermod -aG input \"$USER\"";
 
 fn is_mouse_shortcut(shortcut: &str) -> bool {
     shortcut.starts_with("Mouse")
@@ -59,6 +60,8 @@ pub enum Message {
     CaptureShortcut,
     KeyPressed(Key),
     MousePressed(mouse::Button),
+    DismissInputDialog,
+    CopyInputGroupCommand,
     CopyBind,
     Reconnect,
     BackendSelected(BackendChoice),
@@ -82,6 +85,7 @@ pub struct Taplet {
     pub clicks: u64,
     pub message: Option<String>,
     pub capturing_shortcut: bool,
+    pub input_permission_dialog: bool,
     suppress_hotkey_until: Option<Instant>,
     pub custom_hex_text: String,
     pub window_size: Size,
@@ -130,6 +134,7 @@ impl Taplet {
             clicks: 0,
             message,
             capturing_shortcut: false,
+            input_permission_dialog: false,
             suppress_hotkey_until: None,
             custom_hex_text,
             window_size: Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
@@ -200,7 +205,14 @@ impl Taplet {
 
     fn handle_hotkey(&mut self, event: HotkeyEvent) {
         match event {
-            HotkeyEvent::Status(status) => self.hotkey = status,
+            HotkeyEvent::Status(status) => {
+                if matches!(status, HotkeyStatus::Unavailable(_))
+                    && !crate::hotkey::input_access_available()
+                {
+                    self.input_permission_dialog = true;
+                }
+                self.hotkey = status;
+            }
             HotkeyEvent::Activated => {
                 let suppressed = self.capturing_shortcut
                     || self
@@ -424,6 +436,10 @@ impl Taplet {
                 }
             }
             Message::CopyBind => return iced::clipboard::write(self.hyprland_bind()),
+            Message::DismissInputDialog => self.input_permission_dialog = false,
+            Message::CopyInputGroupCommand => {
+                return iced::clipboard::write(INPUT_GROUP_COMMAND.to_string());
+            }
             Message::Reconnect => {
                 self.backend = BackendStatus::Connecting;
                 self.engine.send(Command::Reconnect);
@@ -474,9 +490,15 @@ impl Taplet {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        match self.page {
+        let content = match self.page {
             Page::Main => ui::main_view(self),
             Page::Advanced => ui::advanced_view(self),
+        };
+
+        if self.input_permission_dialog {
+            ui::input_permission_dialog(content)
+        } else {
+            content
         }
     }
 

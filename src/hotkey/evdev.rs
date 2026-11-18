@@ -59,6 +59,21 @@ fn device_name(file: &File) -> Option<String> {
     Some(String::from_utf8_lossy(&buf[..end]).into_owned())
 }
 
+pub(super) fn input_access_available() -> bool {
+    let Ok(entries) = std::fs::read_dir("/dev/input") else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        if !entry.file_name().to_string_lossy().starts_with("event") {
+            return false;
+        }
+        let Ok(file) = OpenOptions::new().read(true).open(entry.path()) else {
+            return false;
+        };
+        !device_name(&file).is_some_and(|name| name.starts_with("taplet"))
+    })
+}
+
 fn scan(codes: &[u16]) -> Vec<Device> {
     let Ok(entries) = std::fs::read_dir("/dev/input") else {
         return Vec::new();

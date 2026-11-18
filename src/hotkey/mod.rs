@@ -34,6 +34,10 @@ pub enum Event {
     Activated,
 }
 
+pub fn input_access_available() -> bool {
+    evdev::input_access_available()
+}
+
 pub struct Hotkeys {
     events: Receiver<Event>,
     events_tx: Sender<Event>,
