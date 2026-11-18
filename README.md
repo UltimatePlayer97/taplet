@@ -50,6 +50,8 @@ click_type = "Single"
 repeat_mode = "Continuous"
 repeat_count = 100
 theme = "Dark"
+accent = "Violet"
+custom_accent = [139, 92, 246]
 shortcut = "F6"
 ```
 

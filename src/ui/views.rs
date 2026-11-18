@@ -1,36 +1,336 @@
+use iced::overlay::menu;
 use iced::widget::{
     Space, button, column, container, pick_list, row, rule, scrollable, slider, text, text_input,
 };
-use iced::{Alignment, Border, Element, Length, Theme};
+use iced::{Alignment, Border, Color, Element, Length, Shadow, Theme};
 use iced_fonts::lucide;
 
+use super::theme::{accent_color, blend, divider, field, muted_text, readable_ink, surface};
 use crate::app::{BackendStatus, Message, Taplet};
-use crate::config::{BackendChoice, ClickLocation, ClickType, RepeatMode, ThemeMode};
+use crate::config::{AccentColor, BackendChoice, ClickLocation, ClickType, RepeatMode, ThemeMode};
 use crate::hotkey::HotkeyStatus;
 use crate::input::MouseButton;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ButtonKind {
+    Primary,
+    Secondary,
+    Text,
+    Selected,
+    Danger,
+    Row(bool),
+}
+
+fn button_style(theme: &Theme, status: button::Status, kind: ButtonKind) -> button::Style {
+    let palette = theme.extended_palette();
+    let accent = palette.primary.base.color;
+    let background = palette.background.base.color;
+    let text = palette.background.base.text;
+
+    let (fill, mut text_color, border_color, border_width) = match kind {
+        ButtonKind::Primary | ButtonKind::Danger => {
+            let base = if kind == ButtonKind::Primary {
+                accent
+            } else {
+                palette.danger.base.color
+            };
+            let fill = match status {
+                button::Status::Hovered => blend(base, Color::WHITE, 0.12),
+                button::Status::Pressed => blend(base, Color::BLACK, 0.08),
+                button::Status::Disabled => blend(base, background, 0.55),
+                button::Status::Active => base,
+            };
+            let ink = if kind == ButtonKind::Primary {
+                palette.primary.base.text
+            } else {
+                palette.danger.base.text
+            };
+            (Some(fill), ink, fill, 0.0)
+        }
+        ButtonKind::Secondary => {
+            let fill = match status {
+                button::Status::Hovered => blend(field(theme), accent, 0.05),
+                button::Status::Pressed => surface(theme),
+                _ => field(theme),
+            };
+            (Some(fill), text, divider(theme), 1.0)
+        }
+        ButtonKind::Selected => {
+            let fill = blend(background, accent, 0.22);
+            (Some(fill), accent, blend(accent, background, 0.35), 1.0)
+        }
+        ButtonKind::Text => {
+            let fill = match status {
+                button::Status::Hovered => Some(field(theme)),
+                button::Status::Pressed => Some(surface(theme)),
+                _ => None,
+            };
+            (fill, text, Color::TRANSPARENT, 0.0)
+        }
+        ButtonKind::Row(selected) => {
+            let fill = if selected {
+                Some(blend(background, accent, 0.12))
+            } else {
+                match status {
+                    button::Status::Hovered => Some(field(theme)),
+                    button::Status::Pressed => Some(surface(theme)),
+                    _ => None,
+                }
+            };
+            (fill, text, Color::TRANSPARENT, 0.0)
+        }
+    };
+
+    if matches!(status, button::Status::Disabled) {
+        text_color = muted_text(theme);
+    }
+
+    button::Style {
+        background: fill.map(Into::into),
+        text_color,
+        border: Border {
+            color: border_color,
+            width: border_width,
+            radius: 5.0.into(),
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
+fn card_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(surface(theme).into()),
+        border: Border {
+            color: divider(theme),
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        text_color: Some(palette.background.base.text),
+        ..container::Style::default()
+    }
+}
+
+fn badge_style(theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(field(theme).into()),
+        border: Border {
+            color: divider(theme),
+            width: 1.0,
+            radius: 5.0.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
+fn segment_track_style(theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(field(theme).into()),
+        border: Border {
+            color: divider(theme),
+            width: 1.0,
+            radius: 7.0.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
+fn pick_list_style(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let palette = theme.extended_palette();
+    let open = matches!(status, pick_list::Status::Opened { .. });
+    let fill = match status {
+        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => {
+            blend(field(theme), palette.primary.base.color, 0.04)
+        }
+        pick_list::Status::Active => field(theme),
+    };
+    pick_list::Style {
+        text_color: palette.background.base.text,
+        placeholder_color: muted_text(theme),
+        handle_color: muted_text(theme),
+        background: fill.into(),
+        border: Border {
+            color: if open {
+                palette.primary.base.color
+            } else {
+                divider(theme)
+            },
+            width: 1.0,
+            radius: 5.0.into(),
+        },
+    }
+}
+
+fn menu_style(theme: &Theme) -> menu::Style {
+    let palette = theme.extended_palette();
+    let shadow = if palette.is_dark {
+        Color::from_rgba(0.0, 0.0, 0.0, 0.35)
+    } else {
+        Color::from_rgba(0.0, 0.0, 0.0, 0.15)
+    };
+    menu::Style {
+        background: field(theme).into(),
+        border: Border {
+            color: divider(theme),
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        text_color: palette.background.base.text,
+        selected_text_color: palette.primary.base.color,
+        selected_background: blend(
+            palette.background.base.color,
+            palette.primary.base.color,
+            0.18,
+        )
+        .into(),
+        shadow: Shadow {
+            color: shadow,
+            offset: iced::Vector::new(0.0, 4.0),
+            blur_radius: 14.0,
+        },
+    }
+}
+
+fn text_input_style(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let palette = theme.extended_palette();
+    let focused = matches!(status, text_input::Status::Focused { .. });
+    let hovered = matches!(
+        status,
+        text_input::Status::Hovered | text_input::Status::Focused { is_hovered: true }
+    );
+    let fill = if hovered || focused {
+        blend(field(theme), palette.primary.base.color, 0.04)
+    } else {
+        field(theme)
+    };
+    text_input::Style {
+        background: fill.into(),
+        border: Border {
+            color: if focused {
+                palette.primary.base.color
+            } else {
+                divider(theme)
+            },
+            width: 1.0,
+            radius: 5.0.into(),
+        },
+        icon: muted_text(theme),
+        placeholder: muted_text(theme),
+        value: palette.background.base.text,
+        selection: palette.primary.base.color.scale_alpha(0.4),
+    }
+}
+
+fn rule_style(theme: &Theme) -> rule::Style {
+    rule::Style {
+        color: divider(theme),
+        radius: 1.0.into(),
+        fill_mode: rule::FillMode::Full,
+        snap: true,
+    }
+}
+
+fn slider_style(theme: &Theme, _status: slider::Status) -> slider::Style {
+    let palette = theme.extended_palette();
+    let accent = palette.primary.base.color;
+    slider::Style {
+        rail: slider::Rail {
+            backgrounds: (accent.into(), field(theme).into()),
+            width: 4.0,
+            border: Border {
+                color: Color::TRANSPARENT,
+                width: 0.0,
+                radius: 2.0.into(),
+            },
+        },
+        handle: slider::Handle {
+            shape: slider::HandleShape::Circle { radius: 6.0 },
+            background: accent.into(),
+            border_width: 2.0,
+            border_color: palette.background.base.color,
+        },
+    }
+}
+
+fn accent_swatch<'a>(
+    accent: AccentColor,
+    current: AccentColor,
+    mode: ThemeMode,
+    custom: [u8; 3],
+) -> Element<'a, Message> {
+    let color = accent_color(accent, mode, custom);
+    let selected = accent == current;
+    button(
+        container(if selected {
+            lucide::check().size(12)
+        } else if accent == AccentColor::Custom {
+            lucide::palette().size(12)
+        } else {
+            lucide::circle().size(8)
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center),
+    )
+    .width(28)
+    .height(28)
+    .padding(0)
+    .style(move |theme, status| {
+        let fill = match status {
+            button::Status::Hovered => blend(color, Color::WHITE, 0.15),
+            button::Status::Pressed => blend(color, Color::BLACK, 0.12),
+            _ => color,
+        };
+        let ink = readable_ink(fill);
+        button::Style {
+            background: Some(fill.into()),
+            text_color: ink,
+            border: Border {
+                color: if selected { ink } else { divider(theme) },
+                width: if selected { 2.0 } else { 1.0 },
+                radius: 7.0.into(),
+            },
+            shadow: Shadow::default(),
+            snap: true,
+        }
+    })
+    .on_press(Message::AccentSelected(accent))
+    .into()
+}
+
+fn custom_channel<'a>(name: &'a str, channel: usize, rgb: [u8; 3]) -> Element<'a, Message> {
+    row![
+        text(name).size(11).style(text::secondary).width(14),
+        slider(0.0..=255.0, rgb[channel] as f32, move |value| {
+            let mut next = rgb;
+            next[channel] = value.round() as u8;
+            Message::CustomAccentChanged(next)
+        })
+        .style(slider_style),
+        text(format!("{:3}", rgb[channel]))
+            .size(11)
+            .font(iced::Font::MONOSPACE)
+            .style(text::secondary),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .into()
+}
 
 fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(content)
         .padding(14)
         .width(Length::Fill)
-        .style(container::rounded_box)
+        .style(card_style)
         .into()
 }
 
 fn badge<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(content)
         .padding([3, 10])
-        .style(|theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.strong.color.scale_alpha(0.5).into()),
-                border: Border {
-                    radius: 6.0.into(),
-                    ..Border::default()
-                },
-                ..container::Style::default()
-            }
-        })
+        .style(badge_style)
         .into()
 }
 
@@ -58,7 +358,7 @@ fn status_badge<'a>(state: &'a Taplet) -> Element<'a, Message> {
             border: Border {
                 color: base.scale_alpha(0.4),
                 width: 1.0,
-                radius: 6.0.into(),
+                radius: 5.0.into(),
             },
             ..container::Style::default()
         }
@@ -75,7 +375,7 @@ fn app_icon<'a>() -> Element<'a, Message> {
                 background: Some(palette.primary.base.color.into()),
                 text_color: Some(palette.primary.base.text),
                 border: Border {
-                    radius: 10.0.into(),
+                    radius: 8.0.into(),
                     ..Border::default()
                 },
                 ..container::Style::default()
@@ -144,10 +444,16 @@ fn segment<'a>(title: &'a str, mode: RepeatMode, current: RepeatMode) -> Element
     .width(Length::Fill)
     .padding(7)
     .on_press(Message::RepeatModeSelected(mode))
-    .style(if mode == current {
-        button::secondary
-    } else {
-        button::text
+    .style(move |theme, status| {
+        button_style(
+            theme,
+            status,
+            if mode == current {
+                ButtonKind::Selected
+            } else {
+                ButtonKind::Text
+            },
+        )
     })
     .into()
 }
@@ -180,7 +486,7 @@ fn location_option<'a>(
     )
     .padding(6)
     .width(Length::Fill)
-    .style(button::text)
+    .style(move |theme, status| button_style(theme, status, ButtonKind::Row(selected)))
     .on_press(message)
     .into()
 }
@@ -217,6 +523,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
 
     let interval_input = text_input("100", &state.interval_text)
         .on_input(Message::IntervalChanged)
+        .style(text_input_style)
         .size(26)
         .padding(4)
         .width(110);
@@ -240,7 +547,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
                 border: Border {
                     color: palette.primary.base.color.scale_alpha(0.4),
                     width: 1.0,
-                    radius: 8.0.into(),
+                    radius: 6.0.into(),
                 },
                 ..container::Style::default()
             }
@@ -272,6 +579,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
             slider(1.0..=1000.0, (1001 - ms) as f32, |v| {
                 Message::IntervalChanged(format!("{}", (1001.0 - v).round() as u32))
             })
+            .style(slider_style)
             .height(14),
             row![
                 caption("Slow"),
@@ -290,6 +598,8 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
                 Some(state.config.button),
                 Message::ButtonSelected
             )
+            .style(pick_list_style)
+            .menu_style(menu_style)
             .width(Length::Fill),
         ]
         .spacing(6)
@@ -301,6 +611,8 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
                 Some(state.config.click_type),
                 Message::ClickTypeSelected
             )
+            .style(pick_list_style)
+            .menu_style(menu_style)
             .width(Length::Fill),
         ]
         .spacing(6)
@@ -318,7 +630,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
     )
     .padding(3)
     .width(Length::Fill)
-    .style(container::rounded_box);
+    .style(segment_track_style);
 
     let mut repeat = column![label("Repeat"), segmented].spacing(6);
 
@@ -329,6 +641,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
                 Space::new().width(Length::Fill),
                 text_input("100", &state.count_text)
                     .on_input(Message::CountChanged)
+                    .style(text_input_style)
                     .width(100),
             ]
             .align_y(Alignment::Center),
@@ -344,7 +657,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
             !fixed,
             Message::LocationSelected(ClickLocation::Cursor),
         ),
-        rule::horizontal(1),
+        rule::horizontal(1).style(rule_style),
         location_option(
             lucide::crosshair().size(14).style(text::primary),
             "Fixed position",
@@ -361,15 +674,17 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
                 text("X").size(12).style(text::secondary),
                 text_input("0", &state.fixed_x_text)
                     .on_input(Message::FixedXChanged)
+                    .style(text_input_style)
                     .width(90),
                 text("Y").size(12).style(text::secondary),
                 text_input("0", &state.fixed_y_text)
                     .on_input(Message::FixedYChanged)
+                    .style(text_input_style)
                     .width(90),
                 Space::new().width(Length::Fill),
                 button(lucide::pipette().size(15))
                     .padding(8)
-                    .style(button::secondary)
+                    .style(|theme, status| { button_style(theme, status, ButtonKind::Secondary) })
                     .on_press(Message::PickPosition),
             ]
             .spacing(8)
@@ -424,6 +739,12 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
         "Start clicking"
     };
 
+    let action_kind = if running {
+        ButtonKind::Danger
+    } else {
+        ButtonKind::Primary
+    };
+
     let action = button(
         container(
             row![action_icon, text(action_label).size(14)]
@@ -439,15 +760,11 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
         (running || (interval_valid && state.count_valid() && state.location_valid()))
             .then_some(Message::ToggleRun),
     )
-    .style(if running {
-        button::danger
-    } else {
-        button::primary
-    });
+    .style(move |theme, status| button_style(theme, status, action_kind));
 
     let settings = button(lucide::sliders_horizontal().size(15))
         .padding(12)
-        .style(button::secondary)
+        .style(|theme, status| button_style(theme, status, ButtonKind::Secondary))
         .on_press(Message::OpenAdvanced);
 
     let counter = if running || state.clicks > 0 {
@@ -458,7 +775,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
 
     let mut content = column![
         header,
-        rule::horizontal(1),
+        rule::horizontal(1).style(rule_style),
         interval_card,
         options,
         repeat,
@@ -485,17 +802,55 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
         state.config.shortcut.clone()
     };
 
-    let appearance = card(
+    let accent = state.config.accent;
+    let mode = state.config.theme;
+    let custom = state.config.custom_accent;
+    let mut swatches = row![accent_swatch(AccentColor::ALL[0], accent, mode, custom)]
+        .spacing(8)
+        .width(Length::Fill)
+        .align_y(Alignment::Center);
+    for swatch in &AccentColor::ALL[1..] {
+        swatches = swatches.push(accent_swatch(*swatch, accent, mode, custom));
+    }
+    swatches = swatches
+        .push(Space::new().width(Length::Fill))
+        .push(text(accent.to_string()).size(11).style(text::secondary));
+
+    let mut appearance_body = column![
+        label("Appearance"),
         column![
-            label("Theme"),
-            pick_list(
-                ThemeMode::ALL,
-                Some(state.config.theme),
-                Message::ThemeSelected
-            ),
+            text("Theme").size(11).style(text::secondary),
+            pick_list(ThemeMode::ALL, Some(mode), Message::ThemeSelected)
+                .style(pick_list_style)
+                .menu_style(menu_style),
         ]
         .spacing(6),
-    );
+        column![text("Accent").size(11).style(text::secondary), swatches,].spacing(6),
+    ]
+    .spacing(10);
+
+    if accent == AccentColor::Custom {
+        let hex = format!("#{:02x}{:02x}{:02x}", custom[0], custom[1], custom[2]);
+        appearance_body = appearance_body.push(
+            column![
+                row![
+                    text("Custom colour").size(11).style(text::secondary),
+                    Space::new().width(Length::Fill),
+                    text(hex)
+                        .size(11)
+                        .font(iced::Font::MONOSPACE)
+                        .style(text::secondary),
+                ]
+                .align_y(Alignment::Center),
+                custom_channel("R", 0, custom),
+                custom_channel("G", 1, custom),
+                custom_channel("B", 2, custom),
+            ]
+            .spacing(6),
+        );
+    }
+
+    let appearance = card(appearance_body);
 
     let (hotkey_text, hotkey_tone) = hotkey_line(&state.hotkey);
     let (hotkey_label, hotkey_badge_tone) = hotkey_short(&state.hotkey);
@@ -508,13 +863,15 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
                 Space::new().width(Length::Fill),
                 button(text("Change").size(13))
                     .on_press(Message::CaptureShortcut)
-                    .style(button::secondary),
+                    .style(|theme, status| {
+                        button_style(theme, status, ButtonKind::Secondary)
+                    }),
             ]
             .align_y(Alignment::Center),
             text("Works while the Taplet window is focused; the global hotkey uses the same key.")
                 .size(11)
                 .style(text::secondary),
-            rule::horizontal(1),
+            rule::horizontal(1).style(rule_style),
             row![
                 text("Global hotkey").size(13),
                 Space::new().width(Length::Fill),
@@ -529,13 +886,15 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
             text("Tries the XDG GlobalShortcuts portal first, then falls back to reading /dev/input (input group required).")
                 .size(11)
                 .style(text::secondary),
-            rule::horizontal(1),
+            rule::horizontal(1).style(rule_style),
             label("Hyprland fallback"),
             text(bind_line.clone()).size(13).font(iced::Font::MONOSPACE),
             row![
                 button(text("Copy line").size(13))
                     .on_press(Message::CopyBind)
-                    .style(button::secondary),
+                    .style(|theme, status| {
+                        button_style(theme, status, ButtonKind::Secondary)
+                    }),
                 text("Only needed if global registration fails.")
                     .size(11)
                     .style(text::secondary),
@@ -554,11 +913,13 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
                 Some(state.config.backend),
                 Message::BackendSelected
             )
+            .style(pick_list_style)
+            .menu_style(menu_style)
             .width(Length::Fill),
             status_line(state),
             button(text("Reconnect").size(13))
                 .on_press(Message::Reconnect)
-                .style(button::secondary),
+                .style(|theme, status| { button_style(theme, status, ButtonKind::Secondary) }),
         ]
         .spacing(8),
     );
@@ -567,7 +928,7 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
         row![
             button(lucide::arrow_left().size(16))
                 .padding(8)
-                .style(button::secondary)
+                .style(|theme, status| { button_style(theme, status, ButtonKind::Secondary) })
                 .on_press(Message::CloseAdvanced),
             text("Advanced").size(22),
         ]

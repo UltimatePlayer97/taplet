@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use crate::config::{
-    BackendChoice, ClickLocation, ClickType, Config, MAX_INTERVAL_MS, MIN_INTERVAL_MS, RepeatMode,
-    ThemeMode,
+    AccentColor, BackendChoice, ClickLocation, ClickType, Config, MAX_INTERVAL_MS, MIN_INTERVAL_MS,
+    RepeatMode, ThemeMode,
 };
 use crate::engine::{ClickPlan, Command, Engine, Event, StopReason};
 use crate::hotkey::{Event as HotkeyEvent, HotkeyStatus, Hotkeys};
@@ -41,6 +41,8 @@ pub enum Message {
     OpenAdvanced,
     CloseAdvanced,
     ThemeSelected(ThemeMode),
+    AccentSelected(AccentColor),
+    CustomAccentChanged([u8; 3]),
     CaptureShortcut,
     KeyPressed(Key),
     CopyBind,
@@ -297,6 +299,15 @@ impl Taplet {
                 self.config.theme = mode;
                 self.persist();
             }
+            Message::AccentSelected(accent) => {
+                self.config.accent = accent;
+                self.persist();
+            }
+            Message::CustomAccentChanged(rgb) => {
+                self.config.custom_accent = rgb;
+                self.config.accent = AccentColor::Custom;
+                self.persist();
+            }
             Message::CaptureShortcut => self.capturing_shortcut = true,
             Message::KeyPressed(key) => {
                 if self.capturing_shortcut {
@@ -367,7 +378,11 @@ impl Taplet {
     }
 
     pub fn theme(&self) -> Theme {
-        ui::build_theme(self.config.theme)
+        ui::build_theme(
+            self.config.theme,
+            self.config.accent,
+            self.config.custom_accent,
+        )
     }
 }
 

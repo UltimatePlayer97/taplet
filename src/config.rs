@@ -44,6 +44,43 @@ pub enum ThemeMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AccentColor {
+    Violet,
+    Blue,
+    Teal,
+    Green,
+    Amber,
+    Rose,
+    Custom,
+}
+
+impl AccentColor {
+    pub const ALL: [AccentColor; 7] = [
+        AccentColor::Violet,
+        AccentColor::Blue,
+        AccentColor::Teal,
+        AccentColor::Green,
+        AccentColor::Amber,
+        AccentColor::Rose,
+        AccentColor::Custom,
+    ];
+}
+
+impl std::fmt::Display for AccentColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AccentColor::Violet => f.write_str("Violet"),
+            AccentColor::Blue => f.write_str("Blue"),
+            AccentColor::Teal => f.write_str("Teal"),
+            AccentColor::Green => f.write_str("Green"),
+            AccentColor::Amber => f.write_str("Amber"),
+            AccentColor::Rose => f.write_str("Rose"),
+            AccentColor::Custom => f.write_str("Custom"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClickLocation {
     Cursor,
     Fixed,
@@ -112,6 +149,8 @@ pub struct Config {
     pub repeat_mode: RepeatMode,
     pub repeat_count: u32,
     pub theme: ThemeMode,
+    pub accent: AccentColor,
+    pub custom_accent: [u8; 3],
     pub shortcut: String,
     pub location: ClickLocation,
     pub fixed_x: i32,
@@ -128,6 +167,8 @@ impl Default for Config {
             repeat_mode: RepeatMode::Continuous,
             repeat_count: DEFAULT_COUNT,
             theme: ThemeMode::Dark,
+            accent: AccentColor::Violet,
+            custom_accent: [0x8b, 0x5c, 0xf6],
             shortcut: DEFAULT_SHORTCUT.to_string(),
             location: ClickLocation::Cursor,
             fixed_x: 0,
@@ -199,6 +240,8 @@ mod tests {
             repeat_mode: RepeatMode::Count,
             repeat_count: 7,
             theme: ThemeMode::Light,
+            accent: AccentColor::Blue,
+            custom_accent: [1, 2, 3],
             shortcut: "F8".to_string(),
             location: ClickLocation::Fixed,
             fixed_x: 100,
