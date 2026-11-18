@@ -14,6 +14,11 @@ use crate::input::{AutoBackend, MouseButton};
 use crate::ipc::{self, RemoteCommand};
 use crate::ui;
 
+const DEFAULT_WINDOW_WIDTH: f32 = 720.0;
+const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
+const MIN_WINDOW_WIDTH: f32 = 280.0;
+const MIN_WINDOW_HEIGHT: f32 = 200.0;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendStatus {
     Connecting,
@@ -49,6 +54,8 @@ pub enum Message {
     CopyBind,
     Reconnect,
     BackendSelected(BackendChoice),
+    WindowResized(Size),
+    EnableResize,
     Tick,
     PickPosition,
     PositionPicked(Option<(i32, i32)>),
@@ -68,6 +75,7 @@ pub struct Taplet {
     pub message: Option<String>,
     pub capturing_shortcut: bool,
     pub custom_hex_text: String,
+    pub window_size: Size,
     page: Page,
     engine: Engine,
     remote: Option<ipc::Listener>,
@@ -76,7 +84,7 @@ pub struct Taplet {
 }
 
 impl Taplet {
-    pub fn boot() -> Self {
+    pub fn boot() -> (Self, Task<Message>) {
         let mut message = None;
         let config = match Config::load() {
             Ok(config) => config,
@@ -97,7 +105,7 @@ impl Taplet {
         let custom_hex_text = hex_string(config.custom_accent);
         let mut hotkeys = Hotkeys::new();
         hotkeys.register(&config.shortcut, config.backend == BackendChoice::Uinput);
-        Self {
+        let state = Self {
             interval_text: config.interval_ms.to_string(),
             count_text: config.repeat_count.to_string(),
             fixed_x_text: config.fixed_x.to_string(),
@@ -111,12 +119,14 @@ impl Taplet {
             message,
             capturing_shortcut: false,
             custom_hex_text,
+            window_size: Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
             page: Page::Main,
             engine: Engine::spawn(move || AutoBackend::new(engine_choice)),
             remote,
             backend_choice,
             hotkeys,
-        }
+        };
+        (state, enable_resize_later())
     }
 
     pub fn interval_valid(&self) -> bool {
@@ -360,6 +370,23 @@ impl Taplet {
                 self.backend = BackendStatus::Connecting;
                 self.engine.send(Command::Reconnect);
             }
+            Message::WindowResized(size) => {
+                self.window_size = size;
+            }
+            Message::EnableResize => {
+                std::thread::spawn(|| {
+                    std::thread::sleep(Duration::from_millis(250));
+                    request_floating();
+                });
+                return iced::window::latest().and_then(|id| {
+                    iced::window::set_resizable(id, true)
+                        .chain(iced::window::set_min_size(
+                            id,
+                            Some(Size::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)),
+                        ))
+                        .chain(iced::window::set_max_size(id, None))
+                });
+            }
             Message::Tick => {
                 for event in self.engine.drain_events() {
                     self.handle_event(event);
@@ -390,6 +417,7 @@ impl Taplet {
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             iced::time::every(Duration::from_millis(40)).map(|_| Message::Tick),
+            iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             keyboard::listen().filter_map(|event| match event {
                 keyboard::Event::KeyPressed { key, .. } => Some(Message::KeyPressed(key)),
                 _ => None,
@@ -406,17 +434,99 @@ impl Taplet {
     }
 }
 
+fn enable_resize_later() -> Task<Message> {
+    let (tx, rx) = iced::futures::channel::oneshot::channel();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(500));
+        let _ = tx.send(());
+    });
+    Task::perform(
+        async move {
+            let _ = rx.await;
+        },
+        |_| Message::EnableResize,
+    )
+}
+
+fn request_floating() {
+    let hyprland = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some();
+    let sway = std::env::var_os("SWAYSOCK").is_some();
+    if !hyprland && !sway {
+        return;
+    }
+
+    let _ = std::thread::Builder::new()
+        .name("taplet-float".to_string())
+        .spawn(move || {
+            if hyprland {
+                for _ in 0..40 {
+                    if hyprland_has_window() && hyprland_set_floating() {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            } else {
+                for _ in 0..8 {
+                    let _ = std::process::Command::new("swaymsg")
+                        .arg("[app_id=\"taplet\"] floating enable")
+                        .output();
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+            }
+        });
+}
+
+fn hyprland_has_window() -> bool {
+    let Ok(output) = std::process::Command::new("hyprctl")
+        .arg("clients")
+        .output()
+    else {
+        return false;
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.trim() == "class: taplet")
+}
+
+fn hyprland_set_floating() -> bool {
+    let Ok(output) = std::process::Command::new("hyprctl")
+        .args(["dispatch", "setfloating", "class:taplet"])
+        .output()
+    else {
+        return false;
+    };
+    let mut text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+    text.push_str(&String::from_utf8_lossy(&output.stderr).to_lowercase());
+    if output.status.success() && text.trim() == "ok" {
+        return true;
+    }
+    if text.contains("invalid") || text.contains("unknown") {
+        let Ok(fallback) = std::process::Command::new("hyprctl")
+            .args(["dispatch", "togglefloating", "class:taplet"])
+            .output()
+        else {
+            return false;
+        };
+        let mut fallback_text = String::from_utf8_lossy(&fallback.stdout).to_lowercase();
+        fallback_text.push_str(&String::from_utf8_lossy(&fallback.stderr).to_lowercase());
+        return fallback.status.success() && fallback_text.trim() == "ok";
+    }
+    false
+}
+
 pub fn run() -> iced::Result {
+    request_floating();
     iced::application(Taplet::boot, Taplet::update, Taplet::view)
         .title("Taplet")
         .subscription(Taplet::subscription)
         .theme(Taplet::theme)
         .font(iced_fonts::LUCIDE_FONT_BYTES)
         .window(iced::window::Settings {
-            size: Size::new(440.0, 740.0),
-            min_size: Some(Size::new(440.0, 740.0)),
-            max_size: Some(Size::new(440.0, 740.0)),
+            size: Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
+            min_size: Some(Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)),
+            max_size: Some(Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)),
             resizable: false,
+            position: iced::window::Position::Centered,
             platform_specific: iced::window::settings::PlatformSpecific {
                 application_id: "taplet".to_string(),
                 ..Default::default()

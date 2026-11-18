@@ -8,6 +8,8 @@ A lightweight, Wayland-native autoclicker with a friendly GUI, inspired by OP Au
 - Not yet verified on Hyprland itself, so test there before relying on it.
 - Not implemented yet: `libei` / RemoteDesktop portal backend, system tray.
 - Clicks follow the cursor by default; a fixed screen position is also available.
+- The window resizes from 280×200 to maximized. Small sizes hide secondary controls; wide windows use two columns.
+- The window maps with fixed-size hints so tiling compositors float it, then unlocks resizing after a short delay. Hyprland and Sway also get an explicit float request.
 
 ## Build
 

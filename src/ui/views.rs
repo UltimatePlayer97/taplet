@@ -274,8 +274,8 @@ fn accent_swatch<'a>(
         .align_x(Alignment::Center)
         .align_y(Alignment::Center),
     )
-    .width(28)
-    .height(28)
+    .width(24)
+    .height(24)
     .padding(0)
     .style(move |theme, status| {
         let fill = match status {
@@ -290,7 +290,7 @@ fn accent_swatch<'a>(
             border: Border {
                 color: if selected { ink } else { divider(theme) },
                 width: if selected { 2.0 } else { 1.0 },
-                radius: 7.0.into(),
+                radius: 5.0.into(),
             },
             shadow: Shadow::default(),
             snap: true,
@@ -339,6 +339,15 @@ fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(content)
         .padding(14)
         .width(Length::Fill)
+        .style(card_style)
+        .into()
+}
+
+fn card_fill<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
+        .padding(14)
+        .width(Length::Fill)
+        .height(Length::Fill)
         .style(card_style)
         .into()
 }
@@ -516,25 +525,43 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
         .unwrap_or(100)
         .clamp(1, 1000);
 
+    let width = state.window_size.width;
+    let height = state.window_size.height;
+    let show_header = height >= 320.0;
+    let show_subtitle = width >= 400.0 && height >= 500.0;
+    let show_slider = height >= 340.0;
+    let wide = width >= 640.0 && height >= 480.0;
+    let show_options = wide || (height >= 430.0 && width >= 300.0);
+    let show_repeat = wide || (height >= 540.0 && width >= 320.0);
+    let show_details = wide || (height >= 700.0 && width >= 340.0);
+
     let cps_text = if interval_valid {
         format!("{:.0} clicks per second", state.config.cps())
     } else {
         "Enter a whole number of milliseconds".to_string()
     };
 
-    let header = row![
-        app_icon(),
-        column![
-            text("Taplet").size(17),
+    let settings = button(lucide::settings().size(15))
+        .padding(8)
+        .style(|theme, status| button_style(theme, status, ButtonKind::Secondary))
+        .on_press(Message::OpenAdvanced);
+
+    let mut title = column![text("Taplet").size(17)].spacing(2);
+    if show_subtitle {
+        title = title.push(
             text("Wayland-native autoclicker")
                 .size(11)
                 .style(text::secondary),
-        ]
-        .spacing(2),
+        );
+    }
+    let header = row![
+        app_icon(),
+        title,
         Space::new().width(Length::Fill),
         status_badge(state),
+        settings,
     ]
-    .spacing(12)
+    .spacing(10)
     .align_y(Alignment::Center);
 
     let interval_input = text_input("100", &state.interval_text)
@@ -573,38 +600,43 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
         Space::new().into()
     };
 
-    let interval_card = card(
-        column![
-            caption("CLICK INTERVAL"),
-            row![
-                column![
-                    row![interval_input, text("ms").size(20)]
-                        .spacing(8)
-                        .align_y(Alignment::Center),
-                    text(cps_text).size(11).style(if interval_valid {
-                        text::secondary
-                    } else {
-                        text::danger
-                    }),
-                ]
-                .spacing(2),
-                Space::new().width(Length::Fill),
-                cps_badge,
-            ]
+    let mut interval_left = column![
+        row![interval_input, text("ms").size(20)]
+            .spacing(8)
+            .align_y(Alignment::Center)
+    ]
+    .spacing(2);
+    if height >= 300.0 {
+        interval_left = interval_left.push(text(cps_text).size(11).style(if interval_valid {
+            text::secondary
+        } else {
+            text::danger
+        }));
+    }
+
+    let mut interval_body = column![].spacing(8);
+    if height >= 300.0 {
+        interval_body = interval_body.push(caption("CLICK INTERVAL"));
+    }
+    interval_body = interval_body.push(
+        row![interval_left, Space::new().width(Length::Fill), cps_badge,]
             .align_y(Alignment::Center),
+    );
+    if show_slider {
+        interval_body = interval_body.push(
             slider(1.0..=1000.0, (1001 - ms) as f32, |v| {
                 Message::IntervalChanged(format!("{}", (1001.0 - v).round() as u32))
             })
             .style(slider_style)
             .height(14),
-            row![
-                caption("Slow"),
-                Space::new().width(Length::Fill),
-                caption("Fast")
-            ],
-        ]
-        .spacing(8),
-    );
+        );
+        interval_body = interval_body.push(row![
+            caption("Slow"),
+            Space::new().width(Length::Fill),
+            caption("Fast")
+        ]);
+    }
+    let interval_card = card(interval_body);
 
     let options = row![
         column![
@@ -708,7 +740,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
         );
     }
 
-    let location = column![label("Click location"), card(location_card)].spacing(6);
+    let location = card(location_card);
 
     let (hotkey_label, hotkey_tone) = hotkey_short(&state.hotkey);
     let shortcut = card(
@@ -749,8 +781,15 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
     } else {
         lucide::circle_play().size(15)
     };
+    let compact_label = width < 380.0;
     let action_label = if running {
-        "Stop clicking"
+        if compact_label {
+            "Stop"
+        } else {
+            "Stop clicking"
+        }
+    } else if compact_label {
+        "Start"
     } else {
         "Start clicking"
     };
@@ -778,37 +817,69 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
     )
     .style(move |theme, status| button_style(theme, status, action_kind));
 
-    let settings = button(lucide::sliders_horizontal().size(15))
-        .padding(12)
-        .style(|theme, status| button_style(theme, status, ButtonKind::Secondary))
-        .on_press(Message::OpenAdvanced);
-
     let counter = if running || state.clicks > 0 {
         format!("{} clicks", state.clicks)
     } else {
         String::new()
     };
 
-    let mut content = column![
-        header,
-        rule::horizontal(1).style(rule_style),
-        interval_card,
-        options,
-        repeat,
-        location,
-        shortcut,
-        row![action, settings].spacing(8),
-    ]
-    .spacing(12);
+    let mut body = column![].spacing(12);
+    if show_header {
+        body = body.push(header);
+        body = body.push(rule::horizontal(1).style(rule_style));
+    }
+
+    if wide {
+        let left = column![interval_card, options, card_fill(repeat)]
+            .spacing(12)
+            .height(Length::Fill);
+        let right = column![location, card_fill(shortcut)]
+            .spacing(12)
+            .height(Length::Fill);
+        body = body.push(
+            row![left.width(Length::Fill), right.width(Length::Fill)]
+                .spacing(12)
+                .height(Length::Fill),
+        );
+    } else {
+        body = body.push(interval_card);
+        if show_options {
+            body = body.push(options);
+        }
+        if show_repeat {
+            body = body.push(repeat);
+        }
+        if show_details {
+            body = body.push(location);
+            body = body.push(shortcut);
+        }
+    }
 
     if let Some(message) = &state.message {
-        content = content.push(text(message.as_str()).size(12).style(text::danger));
+        body = body.push(text(message.as_str()).size(12).style(text::danger));
     }
     if !counter.is_empty() {
-        content = content.push(text(counter).size(11).style(text::secondary));
+        body = body.push(text(counter).size(11).style(text::secondary));
     }
 
-    container(content).padding(16).width(Length::Fill).into()
+    let padding = if height < 400.0 { 12 } else { 16 };
+    let content: Element<'_, Message> = if wide {
+        column![body.height(Length::Fill), action]
+            .spacing(12)
+            .height(Length::Fill)
+            .into()
+    } else {
+        column![scrollable(body).height(Length::Fill), action]
+            .spacing(12)
+            .height(Length::Fill)
+            .into()
+    };
+
+    container(content)
+        .padding(padding)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
@@ -822,15 +893,17 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
     let mode = state.config.theme;
     let custom = state.config.custom_accent;
     let mut swatches = row![accent_swatch(AccentColor::ALL[0], accent, mode, custom)]
-        .spacing(8)
+        .spacing(5)
         .width(Length::Fill)
         .align_y(Alignment::Center);
     for swatch in &AccentColor::ALL[1..] {
         swatches = swatches.push(accent_swatch(*swatch, accent, mode, custom));
     }
-    swatches = swatches
-        .push(Space::new().width(Length::Fill))
-        .push(text(accent.to_string()).size(11).style(text::secondary));
+    if state.window_size.width >= 380.0 {
+        swatches = swatches
+            .push(Space::new().width(Length::Fill))
+            .push(text(accent.to_string()).size(11).style(text::secondary));
+    }
 
     let mut appearance_body = column![
         label("Appearance"),
@@ -848,35 +921,42 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
     if accent == AccentColor::Custom {
         let valid = state.custom_hex_valid();
         let empty = state.custom_hex_text.trim().is_empty();
+        let narrow = state.window_size.width < 360.0;
         let hint = if valid || empty {
             "Preview"
         } else {
             "Invalid hex"
         };
-        appearance_body = appearance_body.push(
-            column![
-                row![
-                    text("Hex").size(11).style(text::secondary).width(16),
-                    text_input("#8b5cf6", &state.custom_hex_text)
-                        .on_input(Message::CustomHexChanged)
-                        .style(text_input_style)
-                        .width(110),
-                    color_preview(accent_color(AccentColor::Custom, mode, custom)),
-                    Space::new().width(Length::Fill),
-                    text(hint).size(10).style(if valid || empty {
+        let mut hex_row = row![
+            text("Hex").size(11).style(text::secondary).width(16),
+            text_input("#8b5cf6", &state.custom_hex_text)
+                .on_input(Message::CustomHexChanged)
+                .style(text_input_style)
+                .width(if narrow { 96 } else { 110 }),
+            color_preview(accent_color(AccentColor::Custom, mode, custom)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        if !narrow {
+            hex_row =
+                hex_row
+                    .push(Space::new().width(Length::Fill))
+                    .push(text(hint).size(10).style(if valid || empty {
                         text::secondary
                     } else {
                         text::danger
-                    }),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
-                custom_channel("R", 0, custom),
-                custom_channel("G", 1, custom),
-                custom_channel("B", 2, custom),
-            ]
-            .spacing(6),
-        );
+                    }));
+        }
+
+        let mut custom_section = column![hex_row];
+        if narrow && !valid && !empty {
+            custom_section = custom_section.push(text("Invalid hex").size(10).style(text::danger));
+        }
+        custom_section = custom_section
+            .push(custom_channel("R", 0, custom))
+            .push(custom_channel("G", 1, custom))
+            .push(custom_channel("B", 2, custom));
+        appearance_body = appearance_body.push(custom_section.spacing(6));
     }
 
     let appearance = card(appearance_body);
