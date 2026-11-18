@@ -3,7 +3,7 @@ use iced::keyboard::{self, Key};
 use iced::{Element, Size, Subscription, Task, Theme};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::{
     AccentColor, BackendChoice, ClickLocation, ClickType, Config, MAX_INTERVAL_MS, MIN_INTERVAL_MS,
@@ -19,6 +19,7 @@ const DEFAULT_WINDOW_WIDTH: f32 = 720.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 480.0;
 const MIN_WINDOW_WIDTH: f32 = 280.0;
 const MIN_WINDOW_HEIGHT: f32 = 200.0;
+const HOTKEY_CAPTURE_GRACE: Duration = Duration::from_millis(750);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendStatus {
@@ -75,6 +76,7 @@ pub struct Taplet {
     pub clicks: u64,
     pub message: Option<String>,
     pub capturing_shortcut: bool,
+    suppress_hotkey_until: Option<Instant>,
     pub custom_hex_text: String,
     pub window_size: Size,
     page: Page,
@@ -119,6 +121,7 @@ impl Taplet {
             clicks: 0,
             message,
             capturing_shortcut: false,
+            suppress_hotkey_until: None,
             custom_hex_text,
             window_size: Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
             page: Page::Main,
@@ -176,12 +179,24 @@ impl Taplet {
     fn handle_hotkey(&mut self, event: HotkeyEvent) {
         match event {
             HotkeyEvent::Status(status) => self.hotkey = status,
-            HotkeyEvent::Activated => self.toggle(),
+            HotkeyEvent::Activated => {
+                let suppressed = self.capturing_shortcut
+                    || self
+                        .suppress_hotkey_until
+                        .is_some_and(|until| Instant::now() < until);
+                if !suppressed {
+                    self.toggle();
+                }
+            }
         }
     }
 
     fn start(&mut self) {
-        if !self.interval_valid() || !self.count_valid() || !self.location_valid() {
+        if self.capturing_shortcut
+            || !self.interval_valid()
+            || !self.count_valid()
+            || !self.location_valid()
+        {
             return;
         }
         self.message = None;
@@ -311,6 +326,9 @@ impl Taplet {
             Message::ToggleRun => self.toggle(),
             Message::OpenAdvanced => self.page = Page::Advanced,
             Message::CloseAdvanced => {
+                if self.capturing_shortcut {
+                    self.suppress_hotkey_until = Some(Instant::now() + HOTKEY_CAPTURE_GRACE);
+                }
                 self.capturing_shortcut = false;
                 self.page = Page::Main;
             }
@@ -339,14 +357,21 @@ impl Taplet {
                     self.persist();
                 }
             }
-            Message::CaptureShortcut => self.capturing_shortcut = true,
+            Message::CaptureShortcut => {
+                self.capturing_shortcut = true;
+                self.suppress_hotkey_until = Some(Instant::now() + HOTKEY_CAPTURE_GRACE);
+            }
             Message::KeyPressed(key) => {
                 if self.capturing_shortcut {
                     if key == Key::Named(keyboard::key::Named::Escape) {
                         self.capturing_shortcut = false;
+                        self.suppress_hotkey_until =
+                            Some(Instant::now() + HOTKEY_CAPTURE_GRACE);
                     } else if let Some(name) = Self::key_name(&key) {
                         self.config.shortcut = name;
                         self.capturing_shortcut = false;
+                        self.suppress_hotkey_until =
+                            Some(Instant::now() + HOTKEY_CAPTURE_GRACE);
                         self.persist();
                         self.refresh_hotkeys();
                     }
