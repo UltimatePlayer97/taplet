@@ -300,6 +300,22 @@ fn accent_swatch<'a>(
     .into()
 }
 
+fn color_preview<'a>(color: Color) -> Element<'a, Message> {
+    container(Space::new())
+        .width(24)
+        .height(24)
+        .style(move |theme: &Theme| container::Style {
+            background: Some(color.into()),
+            border: Border {
+                color: divider(theme),
+                width: 1.0,
+                radius: 5.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
 fn custom_channel<'a>(name: &'a str, channel: usize, rgb: [u8; 3]) -> Element<'a, Message> {
     row![
         text(name).size(11).style(text::secondary).width(14),
@@ -830,17 +846,30 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
     .spacing(10);
 
     if accent == AccentColor::Custom {
-        let hex = format!("#{:02x}{:02x}{:02x}", custom[0], custom[1], custom[2]);
+        let valid = state.custom_hex_valid();
+        let empty = state.custom_hex_text.trim().is_empty();
+        let hint = if valid || empty {
+            "Preview"
+        } else {
+            "Invalid hex"
+        };
         appearance_body = appearance_body.push(
             column![
                 row![
-                    text("Custom colour").size(11).style(text::secondary),
+                    text("Hex").size(11).style(text::secondary).width(16),
+                    text_input("#8b5cf6", &state.custom_hex_text)
+                        .on_input(Message::CustomHexChanged)
+                        .style(text_input_style)
+                        .width(110),
+                    color_preview(accent_color(AccentColor::Custom, mode, custom)),
                     Space::new().width(Length::Fill),
-                    text(hex)
-                        .size(11)
-                        .font(iced::Font::MONOSPACE)
-                        .style(text::secondary),
+                    text(hint).size(10).style(if valid || empty {
+                        text::secondary
+                    } else {
+                        text::danger
+                    }),
                 ]
+                .spacing(8)
                 .align_y(Alignment::Center),
                 custom_channel("R", 0, custom),
                 custom_channel("G", 1, custom),

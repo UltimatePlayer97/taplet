@@ -43,6 +43,7 @@ pub enum Message {
     ThemeSelected(ThemeMode),
     AccentSelected(AccentColor),
     CustomAccentChanged([u8; 3]),
+    CustomHexChanged(String),
     CaptureShortcut,
     KeyPressed(Key),
     CopyBind,
@@ -66,6 +67,7 @@ pub struct Taplet {
     pub clicks: u64,
     pub message: Option<String>,
     pub capturing_shortcut: bool,
+    pub custom_hex_text: String,
     page: Page,
     engine: Engine,
     remote: Option<ipc::Listener>,
@@ -92,6 +94,7 @@ impl Taplet {
         };
         let backend_choice = Arc::new(AtomicU8::new(config.backend.as_u8()));
         let engine_choice = Arc::clone(&backend_choice);
+        let custom_hex_text = hex_string(config.custom_accent);
         let mut hotkeys = Hotkeys::new();
         hotkeys.register(&config.shortcut, config.backend == BackendChoice::Uinput);
         Self {
@@ -107,6 +110,7 @@ impl Taplet {
             clicks: 0,
             message,
             capturing_shortcut: false,
+            custom_hex_text,
             page: Page::Main,
             engine: Engine::spawn(move || AutoBackend::new(engine_choice)),
             remote,
@@ -135,6 +139,10 @@ impl Taplet {
         self.config.location == ClickLocation::Cursor
             || (self.fixed_x_text.trim().parse::<i32>().is_ok()
                 && self.fixed_y_text.trim().parse::<i32>().is_ok())
+    }
+
+    pub fn custom_hex_valid(&self) -> bool {
+        parse_hex(&self.custom_hex_text).is_some()
     }
 
     pub fn hyprland_bind(&self) -> String {
@@ -301,12 +309,24 @@ impl Taplet {
             }
             Message::AccentSelected(accent) => {
                 self.config.accent = accent;
+                if accent == AccentColor::Custom {
+                    self.custom_hex_text = hex_string(self.config.custom_accent);
+                }
                 self.persist();
             }
             Message::CustomAccentChanged(rgb) => {
                 self.config.custom_accent = rgb;
                 self.config.accent = AccentColor::Custom;
+                self.custom_hex_text = hex_string(rgb);
                 self.persist();
+            }
+            Message::CustomHexChanged(value) => {
+                self.custom_hex_text = value;
+                if let Some(rgb) = parse_hex(&self.custom_hex_text) {
+                    self.config.custom_accent = rgb;
+                    self.config.accent = AccentColor::Custom;
+                    self.persist();
+                }
             }
             Message::CaptureShortcut => self.capturing_shortcut = true,
             Message::KeyPressed(key) => {
@@ -404,6 +424,28 @@ pub fn run() -> iced::Result {
             ..Default::default()
         })
         .run()
+}
+
+fn hex_string(rgb: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
+}
+
+fn parse_hex(text: &str) -> Option<[u8; 3]> {
+    let value = text.trim();
+    let value = value
+        .strip_prefix('#')
+        .or_else(|| value.strip_prefix("0x"))
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    let digits = value
+        .chars()
+        .map(|character| character.to_digit(16).map(|digit| digit as u8))
+        .collect::<Option<Vec<u8>>>()?;
+    match digits.as_slice() {
+        [r, g, b] => Some([r * 17, g * 17, b * 17]),
+        [r1, r2, g1, g2, b1, b2] => Some([r1 * 16 + r2, g1 * 16 + g2, b1 * 16 + b2]),
+        _ => None,
+    }
 }
 
 fn pick_position() -> Task<Message> {
