@@ -321,6 +321,7 @@ mod tests {
             button: MouseButton::Left,
             click_type: ClickType::Single,
             limit: Some(10),
+            target: None,
         }));
         let stopped = wait_for(&engine, |event| matches!(event, Event::Stopped { .. }));
         assert_eq!(
@@ -346,6 +347,7 @@ mod tests {
             button: MouseButton::Left,
             click_type: ClickType::Double,
             limit: Some(3),
+            target: None,
         }));
         wait_for(&engine, |event| matches!(event, Event::Stopped { .. })).unwrap();
         assert_eq!(log.lock().unwrap().presses, 6);
@@ -361,6 +363,7 @@ mod tests {
             button: MouseButton::Left,
             click_type: ClickType::Single,
             limit: None,
+            target: None,
         }));
         wait_for(&engine, |event| matches!(event, Event::Started)).unwrap();
         let asked = Instant::now();

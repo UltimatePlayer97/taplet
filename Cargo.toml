@@ -6,13 +6,16 @@ description = "Wayland-native autoclicker with a friendly GUI"
 license = "MIT"
 
 [dependencies]
+ashpd = { version = "0.14", default-features = false, features = ["global_shortcuts", "tokio"] }
 dirs = "7"
+futures-util = "0.3"
 libc = "0.2"
 iced = { version = "0.14", default-features = false, features = ["tiny-skia", "crisp", "web-colors", "tokio", "wayland"] }
 iced_fonts = { version = "0.3.0", features = ["lucide"] }
 rustix = { version = "1", features = ["time"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt", "time"] }
 toml = "1"
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }

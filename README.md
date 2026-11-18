@@ -4,10 +4,10 @@ A lightweight, Wayland-native autoclicker with a friendly GUI, inspired by OP Au
 
 ## Status
 
-- Backend: `zwlr_virtual_pointer_v1` (wlroots-style compositors such as Hyprland and Sway). Verified end to end against a headless Sway: press/release delivery, interval accuracy (99–101 ms at a 100 ms setting), fixed counts, double clicks, right button.
+- Backends: `zwlr_virtual_pointer_v1` (wlroots-style compositors such as Hyprland and Sway) and `uinput`, selectable manually or auto-detected. Verified end to end against a headless Sway: press/release delivery, interval accuracy (99–101 ms at a 100 ms setting), fixed counts, double clicks, right button.
 - Not yet verified on Hyprland itself, so test there before relying on it.
-- Not implemented yet: `libei` / RemoteDesktop portal backend, `uinput` fallback, system tray.
-- Clicks happen at the current cursor position. Fixed-position clicking is intentionally absent because this backend cannot read the cursor position.
+- Not implemented yet: `libei` / RemoteDesktop portal backend, system tray.
+- Clicks follow the cursor by default; a fixed screen position is also available.
 
 ## Build
 
@@ -19,7 +19,19 @@ Requires a recent stable Rust toolchain (edition 2024) and Wayland client librar
 
 ## Global shortcut
 
-Wayland has no portable global hotkeys, so Taplet is controlled through a local socket. Bind a key in your compositor to call the CLI:
+Taplet registers the shortcut as a real desktop-wide hotkey. The priority depends on the input backend:
+
+- With the `uinput` backend, the shortcut is read directly from `/dev/input/event*`.
+- With the Wayland backend, Taplet first asks the XDG Desktop Portal `GlobalShortcuts` interface, which works regardless of the focused window.
+- If the portal is missing or rejects the request, Taplet falls back to reading `/dev/input/event*`.
+
+The fallback needs read access to input devices. On most distributions that means adding your user to the `input` group:
+
+```
+sudo usermod -aG input "$USER"
+```
+
+The Advanced page shows which path is active. You can still bind a key in your compositor manually as a last resort:
 
 ```
 bind = , F6, exec, taplet toggle
@@ -47,7 +59,8 @@ shortcut = "F6"
 - `src/app.rs`: Iced state, messages, update loop
 - `src/config.rs`: settings and TOML persistence
 - `src/engine/`: click scheduler on a dedicated thread, monotonic deadlines, immediate cancellation
-- `src/input/`: backend trait and the virtual pointer implementation
+- `src/input/`: backend trait, `zwlr_virtual_pointer_v1`, and `uinput` implementations
+- `src/hotkey/`: global hotkeys through the XDG Desktop Portal, with a `/dev/input` fallback
 - `src/ipc.rs`: Unix socket remote control
 - `src/ui/`: theme and views
 

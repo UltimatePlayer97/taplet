@@ -9,6 +9,7 @@ use crate::config::{
     ThemeMode,
 };
 use crate::engine::{ClickPlan, Command, Engine, Event, StopReason};
+use crate::hotkey::{Event as HotkeyEvent, HotkeyStatus, Hotkeys};
 use crate::input::{AutoBackend, MouseButton};
 use crate::ipc::{self, RemoteCommand};
 use crate::ui;
@@ -57,6 +58,7 @@ pub struct Taplet {
     pub fixed_x_text: String,
     pub fixed_y_text: String,
     pub backend: BackendStatus,
+    pub hotkey: HotkeyStatus,
     pub running: bool,
     pub pending_start: bool,
     pub clicks: u64,
@@ -66,6 +68,7 @@ pub struct Taplet {
     engine: Engine,
     remote: Option<ipc::Listener>,
     backend_choice: Arc<AtomicU8>,
+    hotkeys: Hotkeys,
 }
 
 impl Taplet {
@@ -87,6 +90,8 @@ impl Taplet {
         };
         let backend_choice = Arc::new(AtomicU8::new(config.backend.as_u8()));
         let engine_choice = Arc::clone(&backend_choice);
+        let mut hotkeys = Hotkeys::new();
+        hotkeys.register(&config.shortcut, config.backend == BackendChoice::Uinput);
         Self {
             interval_text: config.interval_ms.to_string(),
             count_text: config.repeat_count.to_string(),
@@ -94,6 +99,7 @@ impl Taplet {
             fixed_y_text: config.fixed_y.to_string(),
             config,
             backend: BackendStatus::Connecting,
+            hotkey: HotkeyStatus::Registering,
             running: false,
             pending_start: false,
             clicks: 0,
@@ -103,6 +109,7 @@ impl Taplet {
             engine: Engine::spawn(move || AutoBackend::new(engine_choice)),
             remote,
             backend_choice,
+            hotkeys,
         }
     }
 
@@ -135,6 +142,20 @@ impl Taplet {
     fn persist(&mut self) {
         if let Err(err) = self.config.save() {
             self.message = Some(format!("Could not save settings: {err}"));
+        }
+    }
+
+    fn refresh_hotkeys(&mut self) {
+        let prefer_uinput = self.config.backend == BackendChoice::Uinput;
+        if self.hotkeys.register(&self.config.shortcut, prefer_uinput) {
+            self.hotkey = HotkeyStatus::Registering;
+        }
+    }
+
+    fn handle_hotkey(&mut self, event: HotkeyEvent) {
+        match event {
+            HotkeyEvent::Status(status) => self.hotkey = status,
+            HotkeyEvent::Activated => self.toggle(),
         }
     }
 
@@ -285,8 +306,11 @@ impl Taplet {
                         self.config.shortcut = name;
                         self.capturing_shortcut = false;
                         self.persist();
+                        self.refresh_hotkeys();
                     }
                 } else if self.page == Page::Main
+                    // The global listener already delivers this key; toggling twice cancels out.
+                    && !matches!(self.hotkey, HotkeyStatus::Active(_))
                     && Self::key_name(&key).as_deref() == Some(self.config.shortcut.as_str())
                 {
                     self.toggle();
@@ -301,12 +325,16 @@ impl Taplet {
                 self.config.backend = choice;
                 self.backend_choice.store(choice.as_u8(), Ordering::Relaxed);
                 self.persist();
+                self.refresh_hotkeys();
                 self.backend = BackendStatus::Connecting;
                 self.engine.send(Command::Reconnect);
             }
             Message::Tick => {
                 for event in self.engine.drain_events() {
                     self.handle_event(event);
+                }
+                for event in self.hotkeys.poll() {
+                    self.handle_hotkey(event);
                 }
                 let commands: Vec<RemoteCommand> = self
                     .remote

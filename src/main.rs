@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod engine;
 mod error;
+mod hotkey;
 mod input;
 mod ipc;
 mod ui;

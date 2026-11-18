@@ -1,11 +1,12 @@
 use iced::widget::{
-    Space, button, column, container, pick_list, row, rule, slider, text, text_input,
+    Space, button, column, container, pick_list, row, rule, scrollable, slider, text, text_input,
 };
 use iced::{Alignment, Border, Element, Length, Theme};
 use iced_fonts::lucide;
 
 use crate::app::{BackendStatus, Message, Taplet};
 use crate::config::{BackendChoice, ClickLocation, ClickType, RepeatMode, ThemeMode};
+use crate::hotkey::HotkeyStatus;
 use crate::input::MouseButton;
 
 fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
@@ -106,6 +107,30 @@ fn backend_name(state: &Taplet) -> String {
         BackendStatus::Ready(name) => name.to_string(),
         BackendStatus::Connecting => "Connecting…".to_string(),
         BackendStatus::Unavailable(_) => "Unavailable".to_string(),
+    }
+}
+
+fn hotkey_line(status: &HotkeyStatus) -> (String, Option<bool>) {
+    match status {
+        HotkeyStatus::Registering => ("Registering…".to_string(), None),
+        HotkeyStatus::Active(backend) => (format!("Active via {}", backend.label()), Some(true)),
+        HotkeyStatus::Unavailable(reason) => (reason.clone(), Some(false)),
+    }
+}
+
+fn hotkey_short(status: &HotkeyStatus) -> (&'static str, Option<bool>) {
+    match status {
+        HotkeyStatus::Registering => ("Registering…", None),
+        HotkeyStatus::Active(_) => ("Active", Some(true)),
+        HotkeyStatus::Unavailable(_) => ("Unavailable", Some(false)),
+    }
+}
+
+fn status_text_style(tone: Option<bool>) -> fn(&Theme) -> text::Style {
+    match tone {
+        Some(true) => text::success,
+        Some(false) => text::danger,
+        None => text::secondary,
     }
 }
 
@@ -354,6 +379,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
 
     let location = column![label("Click location"), card(location_card)].spacing(6);
 
+    let (hotkey_label, hotkey_tone) = hotkey_short(&state.hotkey);
     let shortcut = card(
         column![
             row![
@@ -361,6 +387,16 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
                 text("Start / stop shortcut").size(13),
                 Space::new().width(Length::Fill),
                 badge(text(state.config.shortcut.clone()).size(11)),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+            row![
+                lucide::globe().size(13).style(text::secondary),
+                text("Global hotkey").size(11).style(text::secondary),
+                Space::new().width(Length::Fill),
+                text(hotkey_label)
+                    .size(11)
+                    .style(status_text_style(hotkey_tone)),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -461,9 +497,12 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
         .spacing(6),
     );
 
+    let (hotkey_text, hotkey_tone) = hotkey_line(&state.hotkey);
+    let (hotkey_label, hotkey_badge_tone) = hotkey_short(&state.hotkey);
+    let bind_line = state.hyprland_bind();
     let shortcut = card(
         column![
-            label("Window shortcut"),
+            label("Keyboard shortcut"),
             row![
                 text(shortcut_text).size(18),
                 Space::new().width(Length::Fill),
@@ -472,24 +511,33 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
                     .style(button::secondary),
             ]
             .align_y(Alignment::Center),
-            text("Works while the Taplet window is focused.")
-                .size(12)
+            text("Works while the Taplet window is focused; the global hotkey uses the same key.")
+                .size(11)
                 .style(text::secondary),
-        ]
-        .spacing(6),
-    );
-
-    let bind_line = state.hyprland_bind();
-    let global = card(
-        column![
-            label("Global shortcut (Hyprland)"),
-            text(bind_line.clone()).size(14).font(iced::Font::MONOSPACE),
+            rule::horizontal(1),
+            row![
+                text("Global hotkey").size(13),
+                Space::new().width(Length::Fill),
+                text(hotkey_label)
+                    .size(12)
+                    .style(status_text_style(hotkey_badge_tone)),
+            ]
+            .align_y(Alignment::Center),
+            text(hotkey_text)
+                .size(11)
+                .style(status_text_style(hotkey_tone)),
+            text("Tries the XDG GlobalShortcuts portal first, then falls back to reading /dev/input (input group required).")
+                .size(11)
+                .style(text::secondary),
+            rule::horizontal(1),
+            label("Hyprland fallback"),
+            text(bind_line.clone()).size(13).font(iced::Font::MONOSPACE),
             row![
                 button(text("Copy line").size(13))
                     .on_press(Message::CopyBind)
                     .style(button::secondary),
-                text("Add to hyprland.conf; needs `taplet` on PATH.")
-                    .size(12)
+                text("Only needed if global registration fails.")
+                    .size(11)
                     .style(text::secondary),
             ]
             .spacing(10)
@@ -527,10 +575,13 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
         .align_y(Alignment::Center),
         appearance,
         shortcut,
-        global,
         backend,
     ]
     .spacing(14);
 
-    container(content).padding(20).width(Length::Fill).into()
+    container(scrollable(content))
+        .padding(20)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
