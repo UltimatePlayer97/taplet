@@ -28,7 +28,9 @@ When the desktop exposes a StatusNotifierItem host (KDE, Hyprland/waybar with a 
 - Speed: checkmarked presets from 1000 ms (1 cps) to 10 ms (100 cps). Applies to the next run, same as the interval field in the window. Items use checkmarks rather than a real slider because the StatusNotifierItem menu protocol has no slider control.
 - Quit Taplet (actually quits)
 
-Hide/show uses `xdg_toplevel.set_minimized` on Wayland and real hiding on X11. On Wayland, restoring from the tray requests focus but the compositor decides whether to unminimize; X11 restores reliably. If your compositor ignores minimize requests, the window will stay visible on close.
+The window is destroyed on close and recreated on "Show window" (last known size restored), because Wayland has no reliable way to hide and re-show a window. The process keeps running headless in the tray.
+
+"Close to tray" can be turned off in Advanced settings (default: on). With the option off, clicking the window close button quits the app, and the tray is only used for show/hide and start/stop. If no tray host is available the close button always quits.
 
 If no tray host is available the app logs a warning, the close button quits the app as usual, and everything else works unchanged. The tray icon uses the same `icon.png` (downscaled, sent as a pixmap, with `icon_name = taplet` for theme lookup).
 
@@ -81,6 +83,7 @@ theme = "Dark"
 accent = "Violet"
 custom_accent = [139, 92, 246]
 shortcut = "F6"
+close_to_tray = true
 ```
 
 ## Layout

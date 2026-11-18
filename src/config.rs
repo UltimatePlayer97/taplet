@@ -166,6 +166,7 @@ pub struct Config {
     pub fixed_x: i32,
     pub fixed_y: i32,
     pub backend: BackendChoice,
+    pub close_to_tray: bool,
 }
 
 impl Default for Config {
@@ -184,6 +185,7 @@ impl Default for Config {
             fixed_x: 0,
             fixed_y: 0,
             backend: BackendChoice::Auto,
+            close_to_tray: true,
         }
     }
 }

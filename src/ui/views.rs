@@ -1,7 +1,7 @@
 use iced::overlay::menu;
 use iced::widget::{
-    Space, Stack, button, column, container, pick_list, row, rule, scrollable, slider, text,
-    text_input,
+    Space, Stack, Toggler, button, column, container, pick_list, row, rule, scrollable, slider,
+    text, text_input,
 };
 use iced::{Alignment, Border, Color, Element, Length, Shadow, Theme};
 use iced_fonts::lucide;
@@ -1118,6 +1118,27 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
         .spacing(8),
     );
 
+    let system_tray = card(
+        column![
+            label("System tray"),
+            row![
+                column![
+                    text("Close to tray").size(13),
+                    text("Closing the window keeps Taplet running in the tray. Tray Quit really quits.")
+                        .size(11)
+                        .style(text::secondary),
+                ]
+                .spacing(2),
+                Space::new().width(Length::Fill),
+                Toggler::new(state.config.close_to_tray)
+                    .on_toggle(Message::CloseToTrayToggled),
+            ]
+            .align_y(Alignment::Center)
+            .spacing(10),
+        ]
+        .spacing(8),
+    );
+
     let backend = card(
         column![
             label("Input backend"),
@@ -1148,6 +1169,7 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
         .spacing(12)
         .align_y(Alignment::Center),
         appearance,
+        system_tray,
         shortcut,
         backend,
     ]

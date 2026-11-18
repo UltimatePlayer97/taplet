@@ -66,7 +66,8 @@ pub enum Message {
     CopyBind,
     Reconnect,
     BackendSelected(BackendChoice),
-    WindowResized(Size),
+    CloseToTrayToggled(bool),
+    WindowResized(iced::window::Id, Size),
     CloseRequested(iced::window::Id),
     EnableResize,
     Tick,
@@ -135,6 +136,10 @@ impl Taplet {
             &config.shortcut,
             config.backend == BackendChoice::Uinput || is_mouse_shortcut(&config.shortcut),
         );
+        let (window_id, window_open) = iced::window::open(main_window_settings(
+            Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
+            false,
+        ));
         let state = Self {
             interval_text: config.interval_ms.to_string(),
             count_text: config.repeat_count.to_string(),
@@ -161,9 +166,9 @@ impl Taplet {
             tray_events: tray_event_rx,
             tray,
             window_visible: true,
-            window_id: None,
+            window_id: Some(window_id),
         };
-        (state, enable_resize_later())
+        (state, Task::batch([enable_resize_later(), window_open.discard()]))
     }
 
     pub fn interval_valid(&self) -> bool {
@@ -295,14 +300,11 @@ impl Taplet {
         }
     }
 
-    fn hide_window(id: iced::window::Id) -> Task<Message> {
-        iced::window::minimize(id, true)
-            .chain(iced::window::set_mode(id, iced::window::Mode::Hidden))
-    }
-
-    fn show_window(id: iced::window::Id) -> Task<Message> {
-        iced::window::set_mode(id, iced::window::Mode::Windowed)
-            .chain(iced::window::gain_focus(id))
+    fn show_window(&mut self) -> Task<Message> {
+        let (id, open_task) = iced::window::open(main_window_settings(self.window_size, true));
+        self.window_id = Some(id);
+        request_floating();
+        Task::batch([enable_resize_later(), open_task.discard()])
     }
 
     fn sync_tray(&self) {
@@ -495,6 +497,10 @@ impl Taplet {
                 self.backend = BackendStatus::Connecting;
                 self.engine.send(Command::Reconnect);
             }
+            Message::CloseToTrayToggled(enabled) => {
+                self.config.close_to_tray = enabled;
+                self.persist();
+            }
             Message::BackendSelected(choice) => {
                 self.config.backend = choice;
                 self.backend_choice.store(choice.as_u8(), Ordering::Relaxed);
@@ -505,14 +511,15 @@ impl Taplet {
             }
             Message::CloseRequested(id) => {
                 self.window_id = Some(id);
-                if self.tray.is_none() {
-                    return iced::window::close(id);
+                if !self.config.close_to_tray || self.tray.is_none() {
+                    return iced::exit();
                 }
                 self.window_visible = false;
                 self.sync_tray();
-                return Self::hide_window(id);
+                return iced::window::close(id);
             }
-            Message::WindowResized(size) => {
+            Message::WindowResized(id, size) => {
+                self.window_id = Some(id);
                 self.window_size = size;
             }
             Message::EnableResize => {
@@ -561,28 +568,28 @@ impl Taplet {
                 }
                 self.sync_tray();
                 if tray_quit {
-                    return iced::window::latest().and_then(iced::window::close);
+                    return iced::exit();
                 }
                 if window_toggle {
-                    let visible = !self.window_visible;
-                    self.window_visible = visible;
-                    self.sync_tray();
-                    let window_id = self.window_id;
-                    return match window_id {
-                        Some(id) => {
-                            if visible { Self::show_window(id) } else { Self::hide_window(id) }
+                    if self.window_visible {
+                        self.window_visible = false;
+                        self.sync_tray();
+                        if let Some(id) = self.window_id.take() {
+                            return iced::window::close(id);
                         }
-                        None => iced::window::latest().and_then(move |id| {
-                            if visible { Self::show_window(id) } else { Self::hide_window(id) }
-                        }),
-                    };
+                    } else {
+                        self.window_visible = true;
+                        let task = self.show_window();
+                        self.sync_tray();
+                        return task;
+                    }
                 }
             }
         }
         Task::none()
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
+    pub fn view(&self, _window: iced::window::Id) -> Element<'_, Message> {
         let content = match self.page {
             Page::Main => ui::main_view(self),
             Page::Advanced => ui::advanced_view(self),
@@ -598,7 +605,7 @@ impl Taplet {
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             ticker(),
-            iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
+            iced::window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
             iced::window::close_requests().map(Message::CloseRequested),
             keyboard::listen().filter_map(|event| match event {
                 keyboard::Event::KeyPressed { key, .. } => Some(Message::KeyPressed(key)),
@@ -613,7 +620,7 @@ impl Taplet {
         ])
     }
 
-    pub fn theme(&self) -> Theme {
+    pub fn theme(&self, _window: iced::window::Id) -> Theme {
         ui::build_theme(
             self.config.theme,
             self.config.accent,
@@ -726,27 +733,39 @@ fn window_icon() -> Option<iced::window::Icon> {
     iced::window::icon::from_rgba(rgba.into_raw(), width, height).ok()
 }
 
+fn main_window_settings(size: Size, unlocked: bool) -> iced::window::Settings {
+    let fixed = if unlocked {
+        None
+    } else {
+        Some(Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT))
+    };
+    iced::window::Settings {
+        size,
+        min_size: if unlocked {
+            Some(Size::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT))
+        } else {
+            fixed
+        },
+        max_size: fixed,
+        resizable: unlocked,
+        position: iced::window::Position::Centered,
+        icon: window_icon(),
+        exit_on_close_request: false,
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: "taplet".to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 pub fn run() -> iced::Result {
     request_floating();
-    iced::application(Taplet::boot, Taplet::update, Taplet::view)
+    iced::daemon(Taplet::boot, Taplet::update, Taplet::view)
         .title("Taplet")
         .subscription(Taplet::subscription)
-        .exit_on_close_request(false)
         .theme(Taplet::theme)
         .font(iced_fonts::LUCIDE_FONT_BYTES)
-        .window(iced::window::Settings {
-            size: Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
-            min_size: Some(Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)),
-            max_size: Some(Size::new(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)),
-            resizable: false,
-            position: iced::window::Position::Centered,
-            icon: window_icon(),
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: "taplet".to_string(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
         .run()
 }
 
