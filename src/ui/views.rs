@@ -11,6 +11,8 @@ use crate::config::{AccentColor, BackendChoice, ClickLocation, ClickType, Repeat
 use crate::hotkey::HotkeyStatus;
 use crate::input::MouseButton;
 
+const SHORTCUT_CARD_HEIGHT: f32 = 116.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ButtonKind {
     Primary,
@@ -339,6 +341,7 @@ fn card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     container(content)
         .padding(14)
         .width(Length::Fill)
+        .height(Length::Shrink)
         .style(card_style)
         .into()
 }
@@ -348,6 +351,18 @@ fn card_fill<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Messag
         .padding(14)
         .width(Length::Fill)
         .height(Length::Fill)
+        .style(card_style)
+        .into()
+}
+
+fn card_fixed<'a>(
+    height: f32,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    container(content)
+        .padding(14)
+        .width(Length::Fill)
+        .height(Length::Fixed(height))
         .style(card_style)
         .into()
 }
@@ -467,6 +482,7 @@ fn segment<'a>(title: &'a str, mode: RepeatMode, current: RepeatMode) -> Element
             .align_x(Alignment::Center),
     )
     .width(Length::Fill)
+    .height(30)
     .padding(7)
     .on_press(Message::RepeatModeSelected(mode))
     .style(move |theme, status| {
@@ -535,6 +551,12 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
     let show_repeat = wide || (height >= 540.0 && width >= 320.0);
     let show_details = wide || (height >= 700.0 && width >= 340.0);
 
+    let counter = if state.running || state.pending_start || state.clicks > 0 {
+        format!("{} clicks", state.clicks)
+    } else {
+        String::new()
+    };
+
     let cps_text = if interval_valid {
         format!("{:.0} clicks per second", state.config.cps())
     } else {
@@ -554,15 +576,20 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
                 .style(text::secondary),
         );
     }
-    let header = row![
+    let mut header = row![
         app_icon(),
         title,
         Space::new().width(Length::Fill),
-        status_badge(state),
-        settings,
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
+    ];
+    if wide && !counter.is_empty() {
+        header = header.push(
+            text(counter.clone())
+                .size(11)
+                .style(text::secondary),
+        );
+    }
+    header = header.push(status_badge(state)).push(settings);
+    let header = header.spacing(10).align_y(Alignment::Center);
 
     let interval_input = text_input("100", &state.interval_text)
         .on_input(Message::IntervalChanged)
@@ -676,25 +703,27 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
         ]
         .spacing(4),
     )
-    .padding(3)
+    .padding(2)
     .width(Length::Fill)
     .style(segment_track_style);
 
-    let mut repeat = column![label("Repeat"), segmented].spacing(6);
+    let mut repeat_controls = row![segmented]
+        .spacing(8)
+        .width(Length::Fill)
+        .align_y(Alignment::Center);
 
     if mode == RepeatMode::Count {
-        repeat = repeat.push(
-            row![
-                text("Number of clicks").size(12).style(text::secondary),
-                Space::new().width(Length::Fill),
-                text_input("100", &state.count_text)
-                    .on_input(Message::CountChanged)
-                    .style(text_input_style)
-                    .width(100),
-            ]
-            .align_y(Alignment::Center),
+        repeat_controls = repeat_controls.push(
+            text_input("100", &state.count_text)
+                .on_input(Message::CountChanged)
+                .style(text_input_style)
+                .width(70),
         );
     }
+
+    let repeat = column![label("Repeat"), repeat_controls]
+        .spacing(4)
+        .width(Length::Fill);
 
     let fixed = state.config.location == ClickLocation::Fixed;
     let mut location_card = column![
@@ -743,37 +772,41 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
     let location = card(location_card);
 
     let (hotkey_label, hotkey_tone) = hotkey_short(&state.hotkey);
-    let shortcut = card(
-        column![
-            row![
-                lucide::keyboard().size(13).style(text::secondary),
-                text("Start / stop shortcut").size(13),
-                Space::new().width(Length::Fill),
-                badge(text(state.config.shortcut.clone()).size(11)),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            row![
-                lucide::globe().size(13).style(text::secondary),
-                text("Global hotkey").size(11).style(text::secondary),
-                Space::new().width(Length::Fill),
-                text(hotkey_label)
-                    .size(11)
-                    .style(status_text_style(hotkey_tone)),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-            row![
-                lucide::monitor().size(13).style(text::secondary),
-                text("Input backend").size(11).style(text::secondary),
-                Space::new().width(Length::Fill),
-                text(backend_name(state)).size(11).style(text::primary),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
+    let shortcut_body: Element<'_, Message> = column![
+        row![
+            lucide::keyboard().size(13).style(text::secondary),
+            text("Start / stop shortcut").size(13),
+            Space::new().width(Length::Fill),
+            badge(text(state.config.shortcut.clone()).size(11)),
         ]
-        .spacing(10),
-    );
+        .spacing(8)
+        .align_y(Alignment::Center),
+        row![
+            lucide::globe().size(13).style(text::secondary),
+            text("Global hotkey").size(11).style(text::secondary),
+            Space::new().width(Length::Fill),
+            text(hotkey_label)
+                .size(11)
+                .style(status_text_style(hotkey_tone)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        row![
+            lucide::monitor().size(13).style(text::secondary),
+            text("Input backend").size(11).style(text::secondary),
+            Space::new().width(Length::Fill),
+            text(backend_name(state)).size(11).style(text::primary),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(10)
+    .into();
+    let shortcut = if wide {
+        card_fill(shortcut_body)
+    } else {
+        card_fixed(SHORTCUT_CARD_HEIGHT, shortcut_body)
+    };
 
     let running = state.running || state.pending_start;
     let action_icon = if running {
@@ -817,12 +850,6 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
     )
     .style(move |theme, status| button_style(theme, status, action_kind));
 
-    let counter = if running || state.clicks > 0 {
-        format!("{} clicks", state.clicks)
-    } else {
-        String::new()
-    };
-
     let mut body = column![].spacing(12);
     if show_header {
         body = body.push(header);
@@ -830,12 +857,15 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
     }
 
     if wide {
-        let left = column![interval_card, options, card_fill(repeat)]
-            .spacing(12)
-            .height(Length::Fill);
-        let right = column![location, card_fill(shortcut)]
-            .spacing(12)
-            .height(Length::Fill);
+        let left = column![
+            interval_card,
+            options,
+            Space::new().height(Length::Fill),
+            card(repeat)
+        ]
+        .spacing(12)
+        .height(Length::Fill);
+        let right = column![location, shortcut].spacing(12).height(Length::Fill);
         body = body.push(
             row![left.width(Length::Fill), right.width(Length::Fill)]
                 .spacing(12)
@@ -858,7 +888,7 @@ pub fn main_view(state: &Taplet) -> Element<'_, Message> {
     if let Some(message) = &state.message {
         body = body.push(text(message.as_str()).size(12).style(text::danger));
     }
-    if !counter.is_empty() {
+    if !wide && !counter.is_empty() {
         body = body.push(text(counter).size(11).style(text::secondary));
     }
 
