@@ -15,6 +15,20 @@ pub enum InputError {
 
     #[error("no permission to open /dev/uinput")]
     UinputPermission,
+
+    #[error("no usable input backend ({0})")]
+    NoBackend(String),
+
+    #[error("libei: RemoteDesktop portal not available")]
+    LibeiPortalUnavailable,
+    #[error("libei: RemoteDesktop portal does not support pointer device type")]
+    LibeiPointerUnsupported,
+    #[error("libei: portal request failed: {0}")]
+    LibeiPortal(String),
+    #[error("libei: EIS handshake failed: {0}")]
+    LibeiHandshake(String),
+    #[error("libei: EIS connection failed: {0}")]
+    LibeiConnection(String),
 }
 
 #[derive(Debug, Error)]

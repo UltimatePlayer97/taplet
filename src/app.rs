@@ -4,6 +4,7 @@ use iced::mouse;
 use iced::{Element, Size, Subscription, Task, Theme};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use crate::config::{
@@ -543,13 +544,26 @@ impl Taplet {
                 for event in self.hotkeys.poll() {
                     self.handle_hotkey(event);
                 }
-                let commands: Vec<RemoteCommand> = self
+                let commands: Vec<(RemoteCommand, Option<Sender<String>>)> = self
                     .remote
                     .as_ref()
                     .map(|listener| listener.commands.try_iter().collect())
                     .unwrap_or_default();
-                for command in commands {
-                    self.handle_remote(command);
+                for (command, reply_tx) in commands {
+                    if command == RemoteCommand::Status {
+                        let active = self.running || self.pending_start;
+                        let status = if active { "running" } else { "idle" };
+                        let backend = self.engine.drain_events().iter().find_map(|e| match e {
+                            crate::engine::Event::Backend { name, .. } => Some(*name),
+                            _ => None,
+                        }).unwrap_or("unknown");
+                        let reply = format!("status={status} backend={backend}");
+                        if let Some(tx) = reply_tx {
+                            let _ = tx.send(reply);
+                        }
+                    } else {
+                        self.handle_remote(command);
+                    }
                 }
                 let tray_events: Vec<TrayEvent> = self.tray_events.try_iter().collect();
                 let mut tray_quit = false;

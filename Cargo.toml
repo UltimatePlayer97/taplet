@@ -7,14 +7,17 @@ license = "MIT"
 
 [dependencies]
 dbus = "0.9"
+ashpd = { version = "0.14", features = ["remote_desktop", "global_shortcuts", "screencast", "tokio"], default-features = false }
 iced = { version = "0.14", default-features = false, features = ["tiny-skia", "crisp", "web-colors", "thread-pool", "wayland"] }
 iced_fonts = { version = "0.3.0", features = ["lucide"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
+reis = { version = "0.7", default-features = false }
 rustix = { version = "1", features = ["event", "fs", "time"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "1"
+tokio = { version = "1", features = ["rt", "macros"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }

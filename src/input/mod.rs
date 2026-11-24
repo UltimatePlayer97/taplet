@@ -1,3 +1,4 @@
+mod libei;
 mod uinput;
 mod virtual_pointer;
 
@@ -6,6 +7,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::config::BackendChoice;
+pub use libei::{auto_select_backend, probe_wlr, LibeiBackend, ProbeResult};
+#[allow(unused_imports)]
+pub use libei::{check_libei, probe_libei};
 pub use uinput::UinputBackend;
 pub use virtual_pointer::VirtualPointerBackend;
 
@@ -56,20 +60,24 @@ pub trait InputBackend {
 enum Active {
     Wlr,
     Uinput,
+    Libei,
 }
 
 pub struct AutoBackend {
     wlr: VirtualPointerBackend,
     uinput: UinputBackend,
+    libei: LibeiBackend,
     active: Active,
     choice: Arc<AtomicU8>,
 }
 
 impl AutoBackend {
     pub fn new(choice: Arc<AtomicU8>) -> Self {
+        let config = crate::config::Config::load().unwrap_or_default();
         Self {
             wlr: VirtualPointerBackend::new(),
             uinput: UinputBackend::new(),
+            libei: LibeiBackend::new(config.libei_restore_token),
             active: Active::Wlr,
             choice,
         }
@@ -79,9 +87,12 @@ impl AutoBackend {
         match self.active {
             Active::Wlr => &mut self.wlr,
             Active::Uinput => &mut self.uinput,
+            Active::Libei => &mut self.libei,
         }
     }
 
+    /// Order: wlr, libei, uinput. libei is only tried when the portal advertises
+    /// a pointer device, so auto mode never raises a permission prompt blindly.
     fn connect_auto(&mut self) -> Result<(), InputError> {
         let wlr_err = match self.wlr.connect() {
             Ok(()) => {
@@ -90,20 +101,23 @@ impl AutoBackend {
             }
             Err(err) => err,
         };
-        match self.uinput.connect() {
+        let libei_err = match self.libei.connect() {
+            Ok(()) => {
+                self.active = Active::Libei;
+                return Ok(());
+            }
+            Err(err) => err,
+        };
+        let uinput_err = match self.uinput.connect() {
             Ok(()) => {
                 self.active = Active::Uinput;
-                Ok(())
+                return Ok(());
             }
-            Err(InputError::UinputPermission) => {
-                self.active = Active::Uinput;
-                Err(InputError::UinputPermission)
-            }
-            Err(_) => {
-                self.active = Active::Wlr;
-                Err(wlr_err)
-            }
-        }
+            Err(err) => err,
+        };
+        Err(InputError::NoBackend(format!(
+            "wlr: {wlr_err}; libei: {libei_err}; uinput: {uinput_err}"
+        )))
     }
 }
 
@@ -112,6 +126,7 @@ impl InputBackend for AutoBackend {
         match self.active {
             Active::Wlr => self.wlr.name(),
             Active::Uinput => self.uinput.name(),
+            Active::Libei => self.libei.name(),
         }
     }
 
@@ -124,6 +139,10 @@ impl InputBackend for AutoBackend {
             BackendChoice::Uinput => {
                 self.active = Active::Uinput;
                 self.uinput.connect()
+            }
+            BackendChoice::Libei => {
+                self.active = Active::Libei;
+                self.libei.connect()
             }
             BackendChoice::Auto => self.connect_auto(),
         }
@@ -148,6 +167,7 @@ impl InputBackend for AutoBackend {
     fn disconnect(&mut self) -> Result<(), InputError> {
         let first = self.wlr.disconnect();
         let second = self.uinput.disconnect();
-        first.and(second)
+        let third = self.libei.disconnect();
+        first.and(second).and(third)
     }
 }

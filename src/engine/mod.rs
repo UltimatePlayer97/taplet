@@ -127,7 +127,7 @@ fn report_backend<B: InputBackend>(
     });
 }
 
-fn click<B: InputBackend>(backend: &mut B, plan: &ClickPlan) -> Result<(), InputError> {
+pub fn click<B: InputBackend>(backend: &mut B, plan: &ClickPlan) -> Result<(), InputError> {
     if let Some((x, y)) = plan.target {
         backend.move_to(x, y)?;
     }

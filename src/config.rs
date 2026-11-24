@@ -101,13 +101,15 @@ pub enum BackendChoice {
     Auto,
     Wlr,
     Uinput,
+    Libei,
 }
 
 impl BackendChoice {
-    pub const ALL: [BackendChoice; 3] = [
+    pub const ALL: [BackendChoice; 4] = [
         BackendChoice::Auto,
         BackendChoice::Wlr,
         BackendChoice::Uinput,
+        BackendChoice::Libei,
     ];
 
     pub fn as_u8(self) -> u8 {
@@ -115,6 +117,7 @@ impl BackendChoice {
             BackendChoice::Auto => 0,
             BackendChoice::Wlr => 1,
             BackendChoice::Uinput => 2,
+            BackendChoice::Libei => 3,
         }
     }
 
@@ -122,6 +125,7 @@ impl BackendChoice {
         match value {
             1 => BackendChoice::Wlr,
             2 => BackendChoice::Uinput,
+            3 => BackendChoice::Libei,
             _ => BackendChoice::Auto,
         }
     }
@@ -133,6 +137,7 @@ impl std::fmt::Display for BackendChoice {
             BackendChoice::Auto => f.write_str("Auto"),
             BackendChoice::Wlr => f.write_str("wlr-virtual-pointer"),
             BackendChoice::Uinput => f.write_str("uinput"),
+            BackendChoice::Libei => f.write_str("libei"),
         }
     }
 }
@@ -167,6 +172,8 @@ pub struct Config {
     pub fixed_y: i32,
     pub backend: BackendChoice,
     pub close_to_tray: bool,
+    #[serde(default)]
+    pub libei_restore_token: Option<String>,
 }
 
 impl Default for Config {
@@ -186,6 +193,7 @@ impl Default for Config {
             fixed_y: 0,
             backend: BackendChoice::Auto,
             close_to_tray: true,
+            libei_restore_token: None,
         }
     }
 }
@@ -259,6 +267,8 @@ mod tests {
             fixed_x: 100,
             fixed_y: -20,
             backend: BackendChoice::Uinput,
+            close_to_tray: false,
+            libei_restore_token: Some("abc123".to_string()),
         };
         let text = toml::to_string_pretty(&config).unwrap();
         let parsed: Config = toml::from_str(&text).unwrap();
