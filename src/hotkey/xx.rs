@@ -460,14 +460,30 @@ mod tests {
         }
     }
 
+    /// Client side of the socketpair. `None` when `libwayland-client` cannot be
+    /// loaded: winit turns on wayland-dlopen, so the system backend needs the shared
+    /// library at runtime. The Nix flake sets LD_LIBRARY_PATH for checks so these
+    /// tests run there; a bare `cargo test` on a box without the library skips.
+    fn client_connection(sock: UnixStream) -> Option<Connection> {
+        match Connection::from_socket(sock) {
+            Ok(conn) => Some(conn),
+            Err(wayland_client::ConnectError::NoWaylandLib) => {
+                eprintln!("skipping xx test: libwayland-client is not loadable");
+                None
+            }
+            Err(other) => panic!("test connection failed: {other}"),
+        }
+    }
+
     /// Run the client against the fake compositor on a socketpair.
     fn drive(
         shortcut: &str,
         deny: bool,
         collect: impl FnOnce(&std::sync::mpsc::Receiver<Event>, &AtomicBool),
-    ) -> (Result<(), String>, Arc<Mutex<Seen>>) {
+    ) -> Option<(Result<(), String>, Arc<Mutex<Seen>>)> {
         let seen = Arc::new(Mutex::new(Seen::default()));
         let (client_sock, server_sock) = UnixStream::pair().unwrap();
+        let conn = client_connection(client_sock)?;
         let stop = Arc::new(AtomicBool::new(false));
 
         let server_seen = Arc::clone(&seen);
@@ -487,7 +503,6 @@ mod tests {
             }
         });
 
-        let conn = Connection::from_socket(client_sock).unwrap();
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
@@ -500,20 +515,22 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
         stop.store(true, Ordering::Relaxed);
         server.join().unwrap();
-        (result, seen)
+        Some((result, seen))
     }
 
     #[test]
     fn binds_key_and_reports_activations() {
         let mut events = Vec::new();
-        let (result, seen) = drive("F6", false, |rx, _| {
+        let Some((result, seen)) = drive("F6", false, |rx, _| {
             let deadline = Instant::now() + Duration::from_secs(5);
             while events.len() < 3 && Instant::now() < deadline {
                 if let Ok(event) = rx.recv_timeout(Duration::from_millis(100)) {
                     events.push(event);
                 }
             }
-        });
+        }) else {
+            return;
+        };
         assert_eq!(result, Ok(()));
         assert_eq!(
             events,
@@ -533,18 +550,22 @@ mod tests {
 
     #[test]
     fn binds_mouse_button() {
-        let (result, seen) = drive("MouseMiddle", false, |rx, _| {
+        let Some((result, seen)) = drive("MouseMiddle", false, |rx, _| {
             let _ = rx.recv_timeout(Duration::from_secs(5));
-        });
+        }) else {
+            return;
+        };
         assert_eq!(result, Ok(()));
         assert_eq!(seen.lock().unwrap().button, Some(0x112));
     }
 
     #[test]
     fn denied_commit_is_reported_with_reason() {
-        let (result, _) = drive("a", true, |_, _| {
+        let Some((result, _)) = drive("a", true, |_, _| {
             thread::sleep(Duration::from_millis(500));
-        });
+        }) else {
+            return;
+        };
         let err = result.unwrap_err();
         assert!(err.contains("not permitted"), "{err}");
         assert!(err.contains("policy says no"), "{err}");

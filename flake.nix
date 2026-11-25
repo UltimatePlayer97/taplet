@@ -31,6 +31,12 @@
 
           buildInputs = runtimeLibs;
 
+          # winit enables wayland-dlopen, so tests that open a Wayland connection need
+          # libwayland-client at runtime. The wrapper below only exists after install.
+          preCheck = ''
+            export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath runtimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+          '';
+
           postInstall = ''
             install -Dm644 packaging/taplet.desktop $out/share/applications/io.github.UltimatePlayer97.taplet.desktop
             install -Dm644 icon.png $out/share/icons/hicolor/1024x1024/apps/taplet.png

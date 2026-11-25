@@ -315,7 +315,15 @@ pub fn run(args: &[String]) -> ExitCode {
         }
         match crate::hotkey::probe_portal("F6", Duration::from_secs(10)) {
             Ok(()) => println!("portal bind: OK (shortcut `taplet-toggle` registered)"),
-            Err(err) => println!("portal bind: FAILED - {err}"),
+            Err(err) => {
+                println!("portal bind: FAILED - {err}");
+                if err.contains("App info not found") {
+                    println!(
+                        "hint: the portal only accepts app IDs that have an installed desktop file. Run:\n  install -Dm644 packaging/taplet.desktop ~/.local/share/applications/{}.desktop",
+                        crate::APP_ID
+                    );
+                }
+            }
         }
     }
 

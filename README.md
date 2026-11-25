@@ -32,7 +32,7 @@ Tried in order, first that works wins:
 
 ## Portal app ID
 
-Taplet registers `io.github.UltimatePlayer97.taplet` with the portal (`org.freedesktop.host.portal.Registry`). Host apps need this or GlobalShortcuts fails with "An app id is required". Install the desktop file under the same name (`io.github.UltimatePlayer97.taplet.desktop`; the Nix flake does).
+Taplet registers `io.github.UltimatePlayer97.taplet` with the portal (`org.freedesktop.host.portal.Registry`). Host apps need this or GlobalShortcuts fails with "An app id is required". The portal rejects IDs without an installed desktop file of the same name: `io.github.UltimatePlayer97.taplet.desktop` (the Nix flake installs it that way). Running a bare binary? Copy `packaging/taplet.desktop` to `~/.local/share/applications/` under that name. `taplet doctor --hotkey` prints the exact command when this is the problem.
 
 ## Diagnostics
 
