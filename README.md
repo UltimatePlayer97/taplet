@@ -4,9 +4,10 @@ A lightweight, Wayland-native autoclicker with a friendly GUI, inspired by OP Au
 
 ## Status
 
-- Backends: `zwlr_virtual_pointer_v1` (wlroots-style compositors such as Hyprland and Sway) and `uinput`, selectable manually or auto-detected. Verified end to end against a headless Sway: press/release delivery, interval accuracy (99–101 ms at a 100 ms setting), fixed counts, double clicks, right button.
+- Backends: `zwlr_virtual_pointer_v1` (wlroots-style compositors such as Hyprland and Sway), `libei` via the RemoteDesktop portal (GNOME, KDE), and `uinput` (anywhere, needs `/dev/uinput` access). Selectable manually or auto-detected in that order. Verified end to end against a headless Sway: press/release delivery, interval accuracy (99–101 ms at a 100 ms setting), fixed counts, double clicks, right button.
 - Not yet verified on Hyprland itself, so test there before relying on it.
-- Not implemented yet: `libei` / RemoteDesktop portal backend.
+- `libei` is tested against an in-process fake EIS server, not yet on a real GNOME or KDE session. Test reports welcome: run `taplet doctor --click` and paste the output.
+- `libei` asks for permission on first use, then stores a restore token in `config.toml` so later runs skip the prompt. Clicks follow the cursor only; fixed position is unsupported on this backend.
 - Clicks follow the cursor by default; a fixed screen position is also available.
 - The window resizes from 280×200 to maximized. Small sizes hide secondary controls; wide windows use two columns.
 - The window maps with fixed-size hints so tiling compositors float it, then unlocks resizing after a short delay. Hyprland and Sway also get an explicit float request.
@@ -18,6 +19,29 @@ cargo build --release
 ```
 
 Requires a recent stable Rust toolchain (edition 2024), Wayland client libraries, and `libdbus-1` development headers.
+
+## Global hotkey
+
+Tried in order, first that works wins:
+
+1. `xx_hotkey_v1`: compositor-native, Taplet picks the key, nothing to configure. Hyprland advertises it; others currently do not. Experimental protocol, so any failure falls through. Compositors may refuse plain letters and digits; F-keys are accepted.
+2. XDG GlobalShortcuts portal: KDE and GNOME let you assign the key in a dialog. Hyprland's portal cannot take a key from the app, so this one needs a `bind` in the compositor config there.
+3. evdev: reads `/dev/input/event*`, needs the `input` group. Works everywhere.
+
+`taplet doctor --hotkey` test-binds F6 through 1 and 2 and prints the exact error if one fails. The protocol XML in `protocols/xx-hotkey-v1.xml` comes from the Hyprland repository (copyright Aurelien Brabant, MIT).
+
+## Portal app ID
+
+Taplet registers `io.github.UltimatePlayer97.taplet` with the portal (`org.freedesktop.host.portal.Registry`). Host apps need this or GlobalShortcuts fails with "An app id is required". Install the desktop file under the same name (`io.github.UltimatePlayer97.taplet.desktop`; the Nix flake does).
+
+## Diagnostics
+
+```
+taplet doctor           # report only, injects no input
+taplet doctor --click   # also performs one left click with the chosen backend
+```
+
+Prints session environment, Wayland and portal support, `/dev/uinput` access, tray host, why each backend was accepted or rejected, which backend auto-detect picks, and the running instance's state. On Hyprland it also lists Taplet's registered global shortcut for your `bind = , F6, global, ...` line. Every probe has a 2 s timeout. Paste the output into bug reports. `--click` with the libei backend may show a permission prompt.
 
 ## System tray
 

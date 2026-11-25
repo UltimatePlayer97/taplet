@@ -225,23 +225,9 @@ fn run_worker(
     cmd_rx: Receiver<WorkerCmd>,
     result_tx: Sender<WorkerResult>,
 ) {
-    // ashpd talks D-Bus through zbus, which needs a Tokio reactor. Portal calls run
-    // to completion here, then runtime + session stay alive for the lifetime of the
-    // EIS fd. Dropping the session would tear the fd down.
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(err) => {
-            let _ = result_tx.send(WorkerResult::Failed(InputError::LibeiConnection(
-                err.to_string(),
-            )));
-            return;
-        }
-    };
-
-    let setup = rt.block_on(async {
+    // Portal calls run on the shared runtime (see portal_rt): ashpd's cached bus
+    // connection must outlive every call, and the session must outlive the EIS fd.
+    let setup = crate::portal_rt::run(async move {
         let portal = RemoteDesktop::new().await.map_err(portal_err)?;
         let session = portal
             .create_session(Default::default())
@@ -272,6 +258,11 @@ fn run_worker(
             .await
             .map_err(portal_err)?;
         Ok::<_, InputError>((portal, session, fd, new_token))
+    })
+    .unwrap_or_else(|| {
+        Err(InputError::LibeiConnection(
+            "portal runtime unavailable".to_string(),
+        ))
     });
 
     let (_portal, session, fd, new_token) = match setup {
@@ -295,7 +286,10 @@ fn run_worker(
     run_eis(context, new_token, cmd_rx, result_tx);
 
     // Best effort: tell the portal we are done so the compositor drops the session.
-    let _ = rt.block_on(session.close());
+    let _ = crate::portal_rt::run(async move {
+        let _keep = _portal;
+        session.close().await
+    });
 }
 
 /// Drive one EIS connection: handshake, wait for a resumed button device, then
@@ -596,11 +590,7 @@ pub fn probe_wlr() -> bool {
 /// Check the RemoteDesktop portal without creating a session (no permission prompt):
 /// the interface must exist and advertise the POINTER device type.
 pub fn check_libei() -> Result<(), InputError> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| InputError::LibeiConnection(e.to_string()))?;
-    rt.block_on(async {
+    crate::portal_rt::run(async {
         let portal = RemoteDesktop::new()
             .await
             .map_err(|_| InputError::LibeiPortalUnavailable)?;
@@ -614,11 +604,7 @@ pub fn check_libei() -> Result<(), InputError> {
             Err(InputError::LibeiPointerUnsupported)
         }
     })
-}
-
-/// Probe whether the RemoteDesktop portal advertises the POINTER device type.
-pub fn probe_libei() -> bool {
-    check_libei().is_ok()
+    .unwrap_or_else(|| Err(InputError::LibeiConnection("portal runtime unavailable".into())))
 }
 
 /// Probe whether `/dev/uinput` can be opened for writing. Creates no device.
@@ -637,19 +623,17 @@ pub enum ProbeResult {
     None,
 }
 
-/// Auto-detect the best available backend. Order: wlr, libei, uinput.
-/// Does not trigger a portal permission prompt.
-pub fn auto_select_backend() -> ProbeResult {
-    if probe_wlr() {
-        return ProbeResult::Wlr;
+/// Pure selection policy. Order: wlr, libei, uinput.
+pub fn select_backend(wlr: bool, libei: bool, uinput: bool) -> ProbeResult {
+    if wlr {
+        ProbeResult::Wlr
+    } else if libei {
+        ProbeResult::Libei
+    } else if uinput {
+        ProbeResult::Uinput
+    } else {
+        ProbeResult::None
     }
-    if probe_libei() {
-        return ProbeResult::Libei;
-    }
-    if probe_uinput() {
-        return ProbeResult::Uinput;
-    }
-    ProbeResult::None
 }
 
 #[cfg(test)]
@@ -664,6 +648,17 @@ mod tests {
         let a = ProbeResult::Wlr;
         let b = a;
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn selection_prefers_wlr_then_libei_then_uinput() {
+        use ProbeResult::*;
+        assert_eq!(select_backend(true, true, true), Wlr);
+        assert_eq!(select_backend(false, true, true), Libei);
+        assert_eq!(select_backend(false, false, true), Uinput);
+        assert_eq!(select_backend(false, false, false), None);
+        assert_eq!(select_backend(true, false, false), Wlr);
+        assert_eq!(select_backend(false, true, false), Libei);
     }
 
     /// Button event as seen by the fake compositor: (device name, code, pressed).

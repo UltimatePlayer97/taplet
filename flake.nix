@@ -32,7 +32,7 @@
           buildInputs = runtimeLibs;
 
           postInstall = ''
-            install -Dm644 packaging/taplet.desktop $out/share/applications/taplet.desktop
+            install -Dm644 packaging/taplet.desktop $out/share/applications/io.github.UltimatePlayer97.taplet.desktop
             install -Dm644 icon.png $out/share/icons/hicolor/1024x1024/apps/taplet.png
             wrapProgram $out/bin/taplet \
               --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs}

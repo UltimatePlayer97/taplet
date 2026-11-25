@@ -7,9 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::config::BackendChoice;
-pub use libei::{auto_select_backend, probe_wlr, LibeiBackend, ProbeResult};
-#[allow(unused_imports)]
-pub use libei::{check_libei, probe_libei};
+pub use libei::{LibeiBackend, ProbeResult, probe_uinput, probe_wlr, select_backend};
+pub use libei::check_libei;
 pub use uinput::UinputBackend;
 pub use virtual_pointer::VirtualPointerBackend;
 

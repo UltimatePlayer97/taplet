@@ -1,5 +1,6 @@
 mod evdev;
 mod portal;
+mod xx;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,15 +9,18 @@ use std::thread;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyBackend {
+    /// Compositor-native `xx_hotkey_v1`: client picks the key, no config needed.
+    Xx,
     Portal,
-    Uinput,
+    Evdev,
 }
 
 impl HotkeyBackend {
     pub fn label(self) -> &'static str {
         match self {
+            HotkeyBackend::Xx => "compositor hotkey (xx_hotkey_v1)",
             HotkeyBackend::Portal => "XDG desktop portal",
-            HotkeyBackend::Uinput => "uinput (reading /dev/input)",
+            HotkeyBackend::Evdev => "evdev (reading /dev/input)",
         }
     }
 }
@@ -99,20 +103,37 @@ impl Drop for Hotkeys {
     }
 }
 
+/// Order: compositor-native `xx_hotkey_v1`, XDG portal, then raw evdev. Each failure is
+/// logged so the reason survives even when a later backend works.
 fn listen(shortcut: String, prefer_uinput: bool, cancel: Arc<AtomicBool>, tx: Sender<Event>) {
-    let portal_error = if prefer_uinput {
-        None
-    } else {
+    let mut notes: Vec<String> = Vec::new();
+
+    if !prefer_uinput {
+        if xx::available() {
+            match xx::run(&shortcut, &cancel, &tx) {
+                Ok(()) => return,
+                Err(err) => {
+                    if cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    eprintln!("taplet: xx_hotkey_v1 failed, trying the portal: {err}");
+                    notes.push(format!("xx_hotkey: {err}"));
+                }
+            }
+        }
+
         match portal::run(&shortcut, &cancel, &tx) {
             Ok(()) => return,
             Err(err) => {
                 if cancel.load(Ordering::Relaxed) {
                     return;
                 }
-                Some(err)
+                // Without this the reason is lost whenever the evdev fallback works.
+                eprintln!("taplet: GlobalShortcuts portal failed, falling back to evdev: {err}");
+                notes.push(format!("portal: {err}"));
             }
         }
-    };
+    }
 
     match evdev::run(&shortcut, &cancel, &tx) {
         Ok(()) => {}
@@ -120,11 +141,56 @@ fn listen(shortcut: String, prefer_uinput: bool, cancel: Arc<AtomicBool>, tx: Se
             if cancel.load(Ordering::Relaxed) {
                 return;
             }
-            let reason = match portal_error {
-                Some(portal) => format!("portal: {portal}; uinput: {err}"),
-                None => format!("uinput: {err}"),
-            };
-            let _ = tx.send(Event::Status(HotkeyStatus::Unavailable(reason)));
+            notes.push(format!("uinput: {err}"));
+            let _ = tx.send(Event::Status(HotkeyStatus::Unavailable(notes.join("; "))));
         }
     }
+}
+
+/// True when the compositor advertises `xx_hotkey_manager_v1`.
+pub fn xx_available() -> bool {
+    xx::available()
+}
+
+type RunFn = fn(&str, &AtomicBool, &Sender<Event>) -> Result<(), String>;
+
+/// Bind a throwaway shortcut through the portal and report the exact outcome.
+/// Used by `taplet doctor --hotkey`. May show a permission dialog on some desktops.
+pub fn probe_portal(shortcut: &str, wait: std::time::Duration) -> Result<(), String> {
+    probe(shortcut, wait, portal::run)
+}
+
+/// Same for the compositor-native `xx_hotkey_v1` protocol.
+pub fn probe_xx(shortcut: &str, wait: std::time::Duration) -> Result<(), String> {
+    probe(shortcut, wait, xx::run)
+}
+
+fn probe(shortcut: &str, wait: std::time::Duration, run: RunFn) -> Result<(), String> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker_cancel = Arc::clone(&cancel);
+    let worker_shortcut = shortcut.to_string();
+    let handle = std::thread::spawn(move || run(&worker_shortcut, &worker_cancel, &tx));
+
+    let deadline = std::time::Instant::now() + wait;
+    let outcome = loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(Event::Status(HotkeyStatus::Active(_))) => break Ok(()),
+            Ok(_) => {}
+            // Sender dropped: the backend already returned, its error is the answer.
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                break match handle.join() {
+                    Ok(Err(err)) => Err(err),
+                    Ok(Ok(())) => Err("session ended immediately".to_string()),
+                    Err(_) => Err("hotkey thread panicked".to_string()),
+                };
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                break Err(format!("no answer within {}s", wait.as_secs()));
+            }
+        }
+    };
+    cancel.store(true, Ordering::Relaxed);
+    outcome
 }

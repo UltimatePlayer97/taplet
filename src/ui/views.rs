@@ -1096,7 +1096,7 @@ pub fn advanced_view(state: &Taplet) -> Element<'_, Message> {
             text(hotkey_text)
                 .size(11)
                 .style(status_text_style(hotkey_tone)),
-            text("Tries the XDG GlobalShortcuts portal first, then falls back to reading /dev/input (input group required).")
+            text("Tries the compositor hotkey protocol (xx_hotkey_v1) first, then the XDG GlobalShortcuts portal, then falls back to reading /dev/input (input group required).")
                 .size(11)
                 .style(text::secondary),
             rule::horizontal(1).style(rule_style),

@@ -143,7 +143,7 @@ pub(super) fn run(shortcut: &str, cancel: &AtomicBool, tx: &Sender<Event>) -> Re
         ));
     }
     if tx
-        .send(Event::Status(HotkeyStatus::Active(HotkeyBackend::Uinput)))
+        .send(Event::Status(HotkeyStatus::Active(HotkeyBackend::Evdev)))
         .is_err()
     {
         return Ok(());

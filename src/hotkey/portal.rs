@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use dbus::arg::{PropMap, RefArg, Variant};
 use dbus::blocking::Connection;
@@ -18,6 +18,10 @@ const REQUEST_INTERFACE: &str = "org.freedesktop.portal.Request";
 const SESSION_INTERFACE: &str = "org.freedesktop.portal.Session";
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_TIMEOUT: Duration = Duration::from_millis(100);
+/// CreateSession never prompts, so a silent portal is broken.
+const SESSION_WAIT: Duration = Duration::from_secs(10);
+/// BindShortcuts may show a permission dialog on some desktops.
+const BIND_WAIT: Duration = Duration::from_secs(120);
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 enum Signal {
@@ -32,6 +36,23 @@ enum Signal {
     },
 }
 
+/// Register this process as `APP_ID` with the portal. Required for host apps, whose
+/// ID portals cannot derive. Skipped inside Flatpak, where the ID is known.
+fn register_host_app(connection: &Connection) -> Result<(), String> {
+    if std::path::Path::new("/.flatpak-info").exists() {
+        return Ok(());
+    }
+    // The Registry interface sits on the main portal object, same as the others.
+    let proxy = connection.with_proxy(PORTAL_SERVICE, PORTAL_PATH, CALL_TIMEOUT);
+    proxy
+        .method_call::<(), _, _, _>(
+            "org.freedesktop.host.portal.Registry",
+            "Register",
+            (crate::APP_ID, PropMap::new()),
+        )
+        .map_err(|err| format!("host registry: {err}"))
+}
+
 pub(super) fn run(
     shortcut: &str,
     cancel: &AtomicBool,
@@ -40,6 +61,12 @@ pub(super) fn run(
     let connection = Connection::new_session()
         .map_err(|err| format!("portal session bus: {err}"))?;
     let (signal_tx, signal_rx) = mpsc::channel();
+    // Not fatal here: old portals lack the Registry. Kept to explain a later failure.
+    let registry_note = register_host_app(&connection).err();
+    let with_note = |err: String| match &registry_note {
+        Some(note) => format!("{err} ({note})"),
+        None => err,
+    };
 
     let response_tx = signal_tx.clone();
     connection
@@ -85,9 +112,15 @@ pub(super) fn run(
     let session_options = session_options(&token("session"));
     let (create_request,): (Path<'static>,) = proxy
         .method_call(PORTAL_INTERFACE, "CreateSession", (session_options,))
-        .map_err(|err| format!("create session: {err}"))?;
+        .map_err(|err| with_note(format!("create session: {err}")))?;
     let create_results =
-        wait_response(&connection, &signal_rx, &create_request.to_string(), cancel)?;
+        wait_response(
+            &connection,
+            &signal_rx,
+            &create_request.to_string(),
+            cancel,
+            SESSION_WAIT,
+        )?;
     let session_handle = create_results
         .get("session_handle")
         .and_then(|value| {
@@ -122,7 +155,13 @@ pub(super) fn run(
             ),
         )
         .map_err(|err| format!("bind: {err}"))?;
-    wait_response(&connection, &signal_rx, &bind_request.to_string(), cancel)?;
+    wait_response(
+        &connection,
+        &signal_rx,
+        &bind_request.to_string(),
+        cancel,
+        BIND_WAIT,
+    )?;
 
     if tx
         .send(Event::Status(HotkeyStatus::Active(HotkeyBackend::Portal)))
@@ -163,10 +202,18 @@ fn wait_response(
     signals: &Receiver<Signal>,
     request_path: &str,
     cancel: &AtomicBool,
+    limit: Duration,
 ) -> Result<PropMap, String> {
+    let deadline = Instant::now() + limit;
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err("portal request cancelled".to_string());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "portal sent no Response within {}s (backend not answering)",
+                limit.as_secs()
+            ));
         }
 
         connection
